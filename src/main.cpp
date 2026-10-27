@@ -52,12 +52,25 @@
 // Team B4: Strict parsing and finite-number validation for serial speed values.
 #include <stdlib.h>
 #include <math.h>
+#include "TestLogger.h"
+#include "NavLidar.h"      // 2D LiDAR geometry for autonomous navigation
+#include "NavSurvey.h"     // live LiDAR survey, for calibrating NavCal on site
+
+TestLogger testLog;                 // global, next to sensors, rover, hmi
+// Team B4: Calibration survey. navCal holds the building measurements the landmark detectors
+// need; every value marked MEASURE in NavLidar.h is still a placeholder. Read the real ones
+// off http://192.168.18.1/survey at each landmark and put them here.
+NavCal navCal;
+NavSurvey navSurvey;
 
 // ---- YOUR KIT ------------------------------------------------------------------------------
 const int BOX_ID = 8;                     // 1..10 = kit number on the box
 
 // ---- settings --------------------------------------------------------------------------------
 const float MAX_SPEED = 0.5f;             // drive pad maximum; 0.5 = full rover speed (100 % PWM)
+// Team B4: Forward speed of the automatic zone test. Note the scale: 0.5 is full speed here, so
+// 0.3 is 60 % PWM, not 30 %. Use 0.15 if you want 30 % of full speed.
+const float TEST_SPEED = 0.3f;
 const uint32_t PAD_TIMEOUT_MS = 400;      // no update from the phone for this long -> stop
 // Team B4: Serial Monitor test speed and automatic stop timeout.
 const float SERIAL_TEST_SPEED = 0.2f;     // speed for Serial Monitor tests
@@ -173,6 +186,7 @@ void updateOled() {
 void setup() {
   Serial.begin(115200);
   delay(200);
+  testLog.begin();                  // mounts the flash file system
   // Team B4: Explain direction-plus-speed commands and required Serial Monitor line ending.
   Serial.println("[Team B4] Serial: f0.3 / b0.3 / l0.3 / r0.3; speed 0..0.5; s=stop w=web");
   Serial.println("[Team B4] Select Newline or Both NL & CR in Serial Monitor, then send a command.");
@@ -192,6 +206,11 @@ void setup() {
 
   sensors.begin(LIDAR_OFFSET_DEG);
   rover.begin(100);  // sends the current drive command every 100 ms
+
+  // Team B4: Start on the test page drives the rover forward at TEST_SPEED for the whole run,
+  // holding its heading with the yaw. Pass 0 here to go back to a passive logger that only
+  // records what you drive by hand.
+  testLog.setTestDrive(TEST_SPEED);
 }
 
 void loop() {
@@ -206,6 +225,9 @@ void loop() {
   float l, r;
   uint32_t age;
   hmi.getDrive(l, r, age);
+  // Team B4: A fresh zero from the pad is the red Stop button. Remember it before the automatic
+  // test overwrites l and r, so Stop on the driving page always ends a running test.
+  const bool padStop = age <= PAD_TIMEOUT_MS && l == 0 && r == 0;
   if (age > PAD_TIMEOUT_MS) l = r = 0;  // key released, page closed or phone gone
   // Team B4: Apply serial commands while serial control is active, with an automatic stop.
   readSerialDrive();
@@ -221,6 +243,12 @@ void loop() {
       l = r = 0;
     }
   }
+  // Team B4: A running zone test drives itself and takes priority over the pad and over serial
+  // control, so it behaves the same however the box was being driven before. It ends on its own
+  // 30 s timer, on an obstacle in front, on Stop on the test page, or on the red Stop here.
+  if (padStop && testLog.isRecording()) testLog.requestStop();
+  float testL, testR;
+  if (testLog.autoDrive(sensors, testL, testR)) { l = testL; r = testR; }
   rover.setDrive(l, r);
 
   // ---- web page and OLED -----------------------------------------------------------------------
@@ -239,6 +267,11 @@ void loop() {
     hmi.showValue("rover.ok", (double)rover.okCount());
     hmi.showValue("rover.fail", (double)rover.failCount());
     hmi.showValue("sys.heap_kB", ESP.getFreeHeap() / 1024.0);
+    // Team B4: What the box is actually commanding, so "it records but does not move" can be
+    // told apart: drive.l/r non-zero means the logger asked and the rover link is the problem.
+    hmi.showValue("drive.l", l);
+    hmi.showValue("drive.r", r);
+    hmi.showValue("test.recording", String(testLog.isRecording() ? "yes" : "no"));
   }
   if (now - lastOled >= 1000) {
     lastOled = now;
@@ -258,4 +291,11 @@ void loop() {
     lastRep = now; n = 0; sumUs = 0; maxUs = 0;
   }
   delay(2);
+
+  // Team B4: Log the command that was actually sent this pass. update() also runs the test's own
+  // clock, so it has to be called every pass, recording or not.
+  testLog.update(sensors, l, r);
+  // Team B4: Survey report, built here on core 1 so it never reads the LiDAR bins while
+  // Sensors is writing them. The web task only ever reads the published half.
+  navSurvey.update(sensors, navCal);
 }

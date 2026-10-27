@@ -1,5 +1,11 @@
 #include "WebHMI.h"
 
+#include "TestLoggerWeb.h"      // at the top of WebHMI.cpp
+extern TestLogger testLog;      // the object from cas_box.ino
+#include "NavSurveyWeb.h"       // /survey: live LiDAR geometry for calibration
+extern NavSurvey navSurvey;     // the object from main.cpp
+
+
 // ---------------------------------------------------------------------------------------------
 // The web page. %TITLE% and %MAXSPD% are filled in by _buildPage().
 // ---------------------------------------------------------------------------------------------
@@ -30,12 +36,16 @@ input[type=range]{width:100%;}
 .table td{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.06);}
 .k{color:var(--muted);}
 canvas{display:block;margin:0 auto;max-width:100%;}
+.times{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0 10px;}
+.times input{width:100%;box-sizing:border-box;margin-top:4px;padding:10px;font-size:17px;font-weight:650;
+ border-radius:10px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--text);}
+.tot{color:var(--acc);font-weight:700;}
 </style></head><body><div class='wrap'>
 <div class='top'><div class='title'>%TITLE%</div><div class='pill' id='conn'>-</div>
  <button id='devBtn' class='btnTiny'>Dev</button></div>
 <div class='card'><div class='label'>State</div><div class='value' id='state'>-</div></div>
-<!-- Team B4: Forward/backward run for 0.5 seconds; left/right run for one second. -->
-<div class='card hidden' id='driveCard'><div class='sectionTitle'>Drive (forward/backward: 0.5 s; left/right: 1 s; Stop cancels)</div>
+<!-- Team B4: One press drives for the time selected below; the box measures it, not the phone. -->
+<div class='card hidden' id='driveCard'><div class='sectionTitle'>Drive (one press = one timed move; Stop cancels)</div>
  <div class='pad'>
   <span></span><button data-d='f'>&#9650;</button><span></span>
   <button data-d='l'>&#9664;</button><button class='stop' data-d='s'>&#9632;</button><button data-d='r'>&#9654;</button>
@@ -49,8 +59,16 @@ canvas{display:block;margin:0 auto;max-width:100%;}
  <label class='label' for='turnSpd'>Slow turning speed: <span id='turnSpdVal'></span></label>
  <!-- Team B4: Lower the slow turning slider minimum to 0.10. -->
  <input type='range' id='turnSpd' min='0.10' step='0.01'>
- <!-- Team B4: Display the duration for straight movement and turns. -->
- <div class='label'>Adjust speeds, then press a direction. Forward/backward: 0.5 s; left/right: 1 s.</div></div>
+ <!-- Team B4: Move time, selected as seconds + milliseconds and enforced by the box. -->
+ <div class='sectionTitle'>Move time (the box measures it, so Wi-Fi delay does not change it)</div>
+ <div class='times'>
+  <label class='label' for='tSec'>Seconds (0 - 5)
+   <input type='number' id='tSec' min='0' max='5' step='1' value='0' inputmode='numeric'></label>
+  <label class='label' for='tMs'>Milliseconds (0 - 999)
+   <input type='number' id='tMs' min='0' max='999' step='10' value='500' inputmode='numeric'></label>
+ </div>
+ <div class='label'>Set the speeds and the time, then press an arrow: it runs for
+  <span class='tot' id='tTotal'>-</span> and stops by itself.</div></div>
 <div class='card'><div class='sectionTitle'>Surroundings (LiDAR top view, front = up, rings 1 m)</div>
  <canvas id='envCv' width='280' height='280'></canvas><div class='label' id='lidarInfo'>-</div>
  <table class='table' id='usTable'></table></div>
@@ -69,19 +87,30 @@ const esc=s=>(''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt
 let dev=false;
 $('devBtn').onclick=()=>{dev=!dev;$('devRoot').classList.toggle('hidden',!dev);$('devBtn').textContent=dev?'Hide':'Dev';};
 
-// Team B4: Timed single-press drive; retain heartbeat and stop on hide / blur.
-// Team B4: Set separate durations for straight movement and turning, in milliseconds.
-const WEB_STRAIGHT_MS=500,WEB_TURN_MS=1000;
-let drv=null,drvTimer=null,drvBtn=null,drvStopTimer=null,drvDeadline=0;
+// Team B4: Timed single-press drive. The wanted length travels to the box in the same request
+// and the box measures it there, so a slow or lost packet no longer changes the distance driven.
+// No heartbeat is needed: one press is one request.
+const MIN_MOVE_MS=50,MAX_MOVE_MS=5000;
+let drvBtn=null,drvOffTimer=null;
 // Requests can overtake each other on Wi-Fi. Each command carries this page's random id and a
 // rising number; the box ignores anything older than the last command it accepted.
 const PAGE_ID=Math.floor(Math.random()*4e9)+1;let seq=0;
-function drvSend(l,r){seq++;fetch('/drive?l='+l.toFixed(2)+'&r='+r.toFixed(2)+'&id='+PAGE_ID+'&n='+seq).catch(()=>{});}
-// Team B4: Cancel both timers when stopping or replacing a command.
-function drvClear(){clearInterval(drvTimer);clearTimeout(drvStopTimer);drvTimer=null;drvStopTimer=null;drv=null;if(drvBtn){drvBtn.classList.remove('on');drvBtn=null;}}
-// Team B4: Removed automatic sequence state and advancement; Stop cancels the active direction.
-function drvStop(){drvClear();drvSend(0,0);}
-// Team B4: Start only the direction selected by the user.
+function drvSend(l,r,ms){seq++;
+  fetch('/drive?l='+l.toFixed(2)+'&r='+r.toFixed(2)+'&id='+PAGE_ID+'&n='+seq+(ms>0?'&ms='+ms:'')).catch(()=>{});}
+// Team B4: Seconds + milliseconds from the two inputs, clamped to what the box accepts.
+function moveMs(){
+  const num=(id,hi)=>Math.max(0,Math.min(hi,parseInt($(id).value,10)||0));
+  return Math.max(MIN_MOVE_MS,Math.min(MAX_MOVE_MS,num('tSec',5)*1000+num('tMs',999)));}
+// Team B4: The highlight only shows the time that was asked for; the box owns the real timing.
+function drvLight(b,ms){
+  clearTimeout(drvOffTimer);drvOffTimer=null;
+  if(drvBtn)drvBtn.classList.remove('on');
+  drvBtn=b;
+  if(b){b.classList.add('on');
+    drvOffTimer=setTimeout(()=>{b.classList.remove('on');if(drvBtn===b)drvBtn=null;},ms);}}
+// Team B4: Stop sends a command without ms, which clears the box timer at once.
+function drvStop(){drvLight(null,0);drvSend(0,0,0);}
+// Team B4: One press = one request = one timed move in the direction the user selected.
 function drvStart(b){
   if(b.dataset.d==='s'){drvStop();return;}
   // Team B4: Accept slider speeds from 0.10 up to the configured maximum for every direction.
@@ -92,14 +121,9 @@ function drvStart(b){
   const turnForward=s,turnBackward=Math.min(readSpeed('turnSpd'),s);
   // Team B4: Each pair is [left motor speed, right motor speed]; sign sets rotation direction.
   const m={f:[s,s],b:[-s,-s],l:[-turnBackward,turnForward],r:[turnForward,-turnBackward]}[b.dataset.d];
-  drvClear();  // switching keys: no stop in between, the new command follows directly
-  drv=m;drvBtn=b;b.classList.add('on');drvSend(m[0],m[1]);
-  // Team B4: Use 500 ms for forward/backward and 1000 ms for left/right, then stop.
-  const runMs=(b.dataset.d==='f'||b.dataset.d==='b')?WEB_STRAIGHT_MS:WEB_TURN_MS;
-  drvDeadline=performance.now()+runMs;
-  drvTimer=setInterval(()=>{if(performance.now()>=drvDeadline){drvStop();return;}drvSend(drv[0],drv[1]);},150);
-  // Team B4: Schedule the stop using the selected direction's duration.
-  drvStopTimer=setTimeout(drvStop,runMs);
+  const ms=moveMs();
+  drvLight(b,ms);
+  drvSend(m[0],m[1],ms);  // the box starts now and stops itself after ms
 }
 // Team B4: Removed the sequence button handler; initialize individual controls only.
 if(MAX_SPEED>0){
@@ -115,6 +139,9 @@ if(MAX_SPEED>0){
     $('turnSpdVal').textContent=parseFloat(turnSp.value).toFixed(2);
   };
   sp.addEventListener('input',show);turnSp.addEventListener('input',show);show();
+  // Team B4: Show the selected move time; moveMs() clamps both fields to the allowed range.
+  const showTime=()=>{const t=moveMs();$('tTotal').textContent=(t/1000).toFixed(2)+' s ('+t+' ms)';};
+  ['tSec','tMs'].forEach(id=>$(id).addEventListener('input',showTime));showTime();
   document.querySelectorAll('.pad button').forEach(b=>{
     b.addEventListener('pointerdown',e=>{e.preventDefault();b.setPointerCapture(e.pointerId);drvStart(b);});
     // Team B4: Releasing a normal press keeps the timed run; a cancelled gesture stops it.
@@ -226,6 +253,12 @@ void WebHMI::begin(const char* ssid, const char* pass, IPAddress ip, uint8_t cha
     const float r = constrain(req->getParam("r")->value().toFloat(), -_driveMax, _driveMax);
     const uint32_t id = strtoul(req->getParam("id")->value().c_str(), nullptr, 10);
     const uint32_t n = strtoul(req->getParam("n")->value().c_str(), nullptr, 10);
+    // ms > 0: timed move. The page sends the wanted length once and the box measures it, so the
+    // distance driven no longer depends on a stop request arriving in time.
+    uint32_t ms = 0;
+    if (req->hasParam("ms")) ms = strtoul(req->getParam("ms")->value().c_str(), nullptr, 10);
+    if (ms > kMaxMoveMs) ms = kMaxMoveMs;
+    const uint32_t now = millis();
     bool fresh;
     portENTER_CRITICAL(&_driveMux);
     // a new page (id) starts over; within a page only a higher number counts
@@ -235,11 +268,16 @@ void WebHMI::begin(const char* ssid, const char* pass, IPAddress ip, uint8_t cha
       _driveSeq = n;
       _driveL = l;
       _driveR = r;
-      _driveMs = millis();
+      _driveMs = now;
+      _driveTimed = ms > 0;        // a command without ms (Stop, hold-to-drive) clears the timer
+      _driveUntilMs = now + ms;
     }
     portEXIT_CRITICAL(&_driveMux);
     req->send(200, "application/json", fresh ? "{\"ok\":true}" : "{\"ok\":false,\"stale\":true}");
   });
+  // next to your server.on("/drive", ...) lines:
+  addTestLogRoutes(*_server, testLog);   // use WebHMI's real server variable name
+  addSurveyRoutes(*_server, navSurvey);  // read only: the survey never commands the motors
   _server->begin();
   _cycleLastUs = micros();
   _cycleWinMs = millis();
@@ -290,8 +328,21 @@ void WebHMI::getDrive(float& left, float& right, uint32_t& ageMs) const {
   left = _driveL;
   right = _driveR;
   const uint32_t ms = _driveMs;
+  const bool timed = _driveTimed;
+  const uint32_t until = _driveUntilMs;
   portEXIT_CRITICAL(&_driveMux);
-  ageMs = ms ? millis() - ms : UINT32_MAX;  // millis() read after ms: never negative
+  const uint32_t now = millis();
+  if (timed) {
+    // While a timed move runs, the box itself is "holding the key": report age 0 so the 0.4 s
+    // deadman in main.cpp cannot cut the move short. The move is still bounded - by its own end
+    // time, at most kMaxMoveMs - and Stop clears it at once. RoverLink's 0.5 s deadman and the
+    // rover's own 3 s timeout are untouched.
+    if ((int32_t)(now - until) < 0) { ageMs = 0; return; }  // signed: survives the millis() wrap
+    left = right = 0;
+    ageMs = UINT32_MAX;
+    return;
+  }
+  ageMs = ms ? now - ms : UINT32_MAX;  // millis() read after ms: never negative
 }
 
 // Loop time over 1 s windows: min / average / max time between two tick() calls.
