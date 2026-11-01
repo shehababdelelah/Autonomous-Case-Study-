@@ -1,12 +1,33 @@
 #include "UsManager.h"
 
-static const uint32_t kPauseBetweenSensorsMs = 5;  // lets the previous echo die out
+// Pause between two sensors. This is what stops one sensor hearing the burst another just sent:
+// in 5 ms sound travels only 1.7 m, so the previous burst was still crossing the room and the
+// next sensor timed it as a near object - which is why readings came back short with nothing in
+// front. 30 ms gives it about 10 m of travel to spread out and fade, and still leaves every
+// sensor a cycle of roughly 5 x 30 ms = 150 ms, comfortably over the 60 ms the HC-SR04 datasheet
+// asks for. If short readings still appear, raise this towards 60 ms before changing anything
+// else - the cost is only the refresh rate.
+static const uint32_t kPauseBetweenSensorsMs = 30;
+
+// Readings below this are not real: the HC-SR04 cannot measure under about 2 cm, so anything
+// shorter is the module timing its own transmit burst ringing in the horn.
+static const int kMinPlausibleCm = 3;
+
+// The module holds echo HIGH for up to ~38 ms when nothing answers at all. A trigger sent while
+// it is still busy is ignored, and pulseIn() would then time the tail of the previous echo and
+// report a short distance. So the line has to be idle before triggering.
+static const uint32_t kEchoIdleTimeoutUs = 45000;
 
 void UsManager::begin(int maxDistanceCm, uint32_t timeoutUs) {
   if (_task) return;  // already running
   _maxDistanceCm = maxDistanceCm;
   _timeoutUs = timeoutUs;
-  _frontCm = _leftCm = _rightCm = _backCm = _frontAngledCm = maxDistanceCm;
+  // assigned one by one: chaining them reads back a volatile, which C++20 deprecates
+  _frontCm = maxDistanceCm;
+  _leftCm = maxDistanceCm;
+  _rightCm = maxDistanceCm;
+  _backCm = maxDistanceCm;
+  _frontAngledCm = maxDistanceCm;
 
   const int pins[5][2] = {{_pins.trigFront, _pins.echoFront}, {_pins.trigLeft, _pins.echoLeft},
                           {_pins.trigRight, _pins.echoRight}, {_pins.trigBack, _pins.echoBack},
@@ -22,6 +43,12 @@ void UsManager::begin(int maxDistanceCm, uint32_t timeoutUs) {
 
 // 10 us trigger pulse, then time the echo pulse. 58 us of echo = 1 cm distance.
 int UsManager::_measureCm(int trigPin, int echoPin) {
+  // Wait out a previous echo still on the line, or we would measure its tail as a near object.
+  const uint32_t idleStart = micros();
+  while (digitalRead(echoPin) == HIGH) {
+    if (micros() - idleStart > kEchoIdleTimeoutUs) return _maxDistanceCm;  // stuck: give up
+    vTaskDelay(1);   // yields: RoverLink shares core 0 at the same priority
+  }
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
   digitalWrite(trigPin, HIGH);
@@ -30,7 +57,8 @@ int UsManager::_measureCm(int trigPin, int echoPin) {
   const uint32_t us = pulseIn(echoPin, HIGH, _timeoutUs);  // blocks, but only in this task
   if (us == 0) return _maxDistanceCm;                        // no echo
   const int cm = us / 58;
-  return (cm <= 0 || cm > _maxDistanceCm) ? _maxDistanceCm : cm;
+  // Out of the module's usable band either way -> "nothing in range", the same as no echo.
+  return (cm < kMinPlausibleCm || cm > _maxDistanceCm) ? _maxDistanceCm : cm;
 }
 
 void UsManager::_taskEntry(void* self) { static_cast<UsManager*>(self)->_taskLoop(); }

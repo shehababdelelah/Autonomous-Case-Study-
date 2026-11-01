@@ -7,8 +7,14 @@
 //
 // Routes:  /                 the page
 //          /values           JSON: state, dev values, loop time, sensor snapshot
-//          /drive?l=..&r=..&id=..&n=..  wheel speeds from the drive pad; id = page instance,
-//                            n = rising number (older commands that arrive late are ignored)
+//          /drive?l=..&r=..&id=..&n=..[&ms=..]  wheel speeds from the drive pad; id = page
+//                            instance, n = rising number (older commands that arrive late are
+//                            ignored).
+//                            ms = timed move: the box runs the command for ms milliseconds and
+//                            stops by itself (capped at kMaxMoveMs). One request per move, so
+//                            Wi-Fi latency cannot stretch or shorten the distance driven.
+//                            Without ms the pad works as before: hold a key, and the 0.4 s
+//                            deadman in main.cpp stops the rover when updates stop arriving.
 //
 // Threads: the web server runs in its own task. Everything the page reads is guarded by a mutex,
 // the drive set point by a spinlock, so loop() and the server never see half-written data.
@@ -19,6 +25,10 @@
 class WebHMI {
 public:
   static const uint8_t kMaxValues = 16;  // named values in the "Dev" view
+
+  // Longest timed move the box accepts. A timed move replaces the 0.4 s deadman with this
+  // bound, so keep it short: if the phone disappears mid-move, the rover drives on until here.
+  static const uint32_t kMaxMoveMs = 5000;
 
   // Starts the access point (password min. 8 characters) and the web server.
   void begin(const char* ssid, const char* pass, IPAddress ip, uint8_t channel);
@@ -62,6 +72,8 @@ private:
   float _driveL = 0, _driveR = 0;
   uint32_t _driveMs = 0;            // 0 = never received
   uint32_t _drivePageId = 0, _driveSeq = 0;  // newest accepted command (page id, number)
+  bool _driveTimed = false;         // true = run the command until _driveUntilMs, then stop
+  uint32_t _driveUntilMs = 0;       // end of the timed move (millis)
 
   // loop time statistics, loop() only
   uint32_t _cycleLastUs = 0, _cycleWinMs = 0, _cycleMinUs = 0, _cycleMaxUs = 0, _cycleCount = 0;
