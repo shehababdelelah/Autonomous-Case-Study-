@@ -10,6 +10,13 @@
 // Runs:
 //   Zone run  "Zn-Rk"  one zone (1..4), files z<n>
 //   Full path "F-Rk"   WP0 -> WP7, files switch to the next zone after WP2, WP3 and WP5
+//   Bench     "S-Rk"   sensor bench (mode 5): records up to 10 min in place, never drives, WP0 only
+//
+// Team B4: Test type per run (requestStart): TYPE_AUTO drives as below, TYPE_MANUAL and
+//   TYPE_SENSORS only record - the operator drives by hand, or the box stands still. A bench run
+//   is always TYPE_SENSORS. The type is written to the events file as a TYPE row, and Log
+//   obstacle adds an OBSTACLE row.
+//   stateJson() is the same status as copyStatus(), as JSON for the phone page.
 //
 //   One zone is one test: press Start, and the zone records for its own time - 1:30 for zone 1,
 //   3:00 for zone 2, 2:00 for zone 3, 1:00 for zone 4 (zoneRunMs) - then saves and ends by
@@ -218,14 +225,23 @@ public:
   static constexpr uint32_t kFeatMs      = 1000;
   static constexpr uint8_t  kFeatMaxRuns = 8;
 
-  // mode/zone 0 = full path, 1..4 = zones
+  // mode/zone 0 = full path, 1..4 = zones, 5 = sensor bench (Team B4)
+  static constexpr uint8_t kBench = 5;
   static const char* zoneName(uint8_t z) {
-    static const char* const n[] = {"full path", "B to C", "F to E", "D/E passage to K", "K to H"};
-    return n[z < 5 ? z : 0];
+    static const char* const n[] = {"full path", "B to C", "F to E", "D/E passage to K", "K to H",
+                                    "sensor bench"};
+    return n[z < 6 ? z : 0];
   }
-  static uint8_t zoneFirstWp(uint8_t z) { static const uint8_t t[] = {0, 0, 2, 3, 5}; return t[z < 5 ? z : 0]; }
-  static uint8_t zoneLastWp(uint8_t z)  { static const uint8_t t[] = {7, 2, 3, 5, 7}; return t[z < 5 ? z : 0]; }
-  static uint8_t zoneRamps(uint8_t z)   { static const uint8_t t[] = {3, 1, 1, 1, 0}; return t[z < 5 ? z : 0]; }
+  static uint8_t zoneFirstWp(uint8_t z) { static const uint8_t t[] = {0, 0, 2, 3, 5, 0}; return t[z < 6 ? z : 0]; }
+  static uint8_t zoneLastWp(uint8_t z)  { static const uint8_t t[] = {7, 2, 3, 5, 7, 0}; return t[z < 6 ? z : 0]; }
+  static uint8_t zoneRamps(uint8_t z)   { static const uint8_t t[] = {3, 1, 1, 1, 0, 0}; return t[z < 6 ? z : 0]; }
+
+  // Team B4: what a run does with the motors. AUTO = autoDrive() at setTestDrive() speed.
+  enum { TYPE_SENSORS = 0, TYPE_MANUAL = 1, TYPE_AUTO = 2 };
+  static const char* typeName(uint8_t t) {
+    static const char* const n[] = {"sensors only", "manual drive", "auto"};
+    return n[t < 3 ? t : 0];
+  }
 
   // Which way the route ramp of a zone tilts the box first, in the ISO 8855 pitch sign
   // (+1 = down, so pitch runs up to +kRampMaxDeg; -1 = up, down to -kRampMaxDeg; 0 = no ramp):
@@ -234,8 +250,8 @@ public:
   // A ramp that tilts the other way is still recorded, but marked in the events file so you can
   // see that the box met the section from the other end.
   static int8_t zoneRampSign(uint8_t z) {
-    static const int8_t t[] = {0, +1, -1, -1, 0};
-    return t[z < 5 ? z : 0];
+    static const int8_t t[] = {0, +1, -1, -1, 0, 0};
+    return t[z < 6 ? z : 0];
   }
 
   /**
@@ -253,9 +269,10 @@ public:
   // zone 3 (D/E passage to K) 2:00, zone 4 (K to H) 1:00 - long enough to cross each section in
   // one go. The run then saves and ends by itself. Index 0 is their sum, for a full path run.
   // A waypoint that is still averaging finishes first, so a run can overrun by up to kAvgMs.
+  // Team B4: index 5, the sensor bench, records for at most 10 min.
   static uint32_t zoneRunMs(uint8_t z) {
-    static const uint32_t t[] = {450000, 90000, 180000, 120000, 60000};
-    return t[z < 5 ? z : 0];
+    static const uint32_t t[] = {450000, 90000, 180000, 120000, 60000, 600000};
+    return t[z < 6 ? z : 0];
   }
 
   void begin() {
@@ -269,7 +286,15 @@ public:
   }
 
   // ---- requests from the web page (safe from the web server task; run in update()) ----
-  void requestStart(uint8_t mode) { if (mode <= 4) { _reqMode = mode; _reqStart = true; } }
+  void requestStart(uint8_t mode) { requestStart(mode, TYPE_AUTO); }
+  // Team B4: type = TYPE_*. A bench run never drives.
+  void requestStart(uint8_t mode, uint8_t type) {
+    if (mode > kBench || _reqStart) return;
+    _reqType = mode == kBench ? (uint8_t)TYPE_SENSORS : (type <= TYPE_AUTO ? type : (uint8_t)TYPE_AUTO);
+    _reqMode = mode;
+    _reqStart = true;
+  }
+  void requestObstacle() { _reqObstacle = true; }   // Team B4: Log obstacle button
   void requestStop()     { _reqStop = true; }
   void requestMark()     { _reqMark = true; }
   void requestUndo()     { _reqUndo = true; }
@@ -297,7 +322,7 @@ public:
   // the reason and closes the files on the next pass.
   template <class S>
   bool autoDrive(S& s, float& left, float& right) const {
-    if (!_rec || _driveSpeed <= 0.0f) return false;
+    if (!_rec || _runDrive <= 0.0f) return false;
     left = right = 0.0f;
     if (_avgActive) return true;                               // standing still for a waypoint
     if (millis() - _zoneT0 < kZeroMs) return true;             // settling for the pitch zero
@@ -305,9 +330,9 @@ public:
     if (blockedBy(s, cm)) return true;                         // blocked: update() ends the run
     // Straight ahead, steered by the heading error: drifted left -> left wheel gets the faster
     // share. Clamped to the base speed so a correction can never reverse or stall a wheel.
-    const float corr = constrain(_yawCorr, -_driveSpeed, _driveSpeed);
-    left = _driveSpeed + corr;
-    right = _driveSpeed - corr;
+    const float corr = constrain(_yawCorr, -_runDrive, _runDrive);
+    left = _runDrive + corr;
+    right = _runDrive - corr;
     return true;
   }
 
@@ -362,11 +387,12 @@ public:
 
     bool acted = false;
     if (_reqStop)   { _reqStop = false;   stopRun(now, "stopped by hand"); acted = true; }
-    if (_reqStart)  { _reqStart = false;  startRun(_reqMode, now); acted = true; }
+    if (_reqStart)  { startRun(_reqMode, now); _reqStart = false; acted = true; }
     if (_reqNext)   { _reqNext = false;   nextZone(now, true, "next zone pressed"); acted = true; }
     if (_reqMark)   { _reqMark = false;   markWaypoint(now);       acted = true; }
     if (_reqUndo)   { _reqUndo = false;   undoLast(now);           acted = true; }
     if (_reqDelete) { _reqDelete = false; deleteRuns(_delName);    acted = true; }
+    if (_reqObstacle) { _reqObstacle = false; logObstacle(now, s); acted = true; }
     if (acted) _lastStatus = now - kStatusMs;
 
     const bool  imu   = s.imuOk();
@@ -402,7 +428,7 @@ public:
     headingStep(yaw, imu);
     // Runaway guard: a heading error this large for this long means the box is no longer on the
     // segment, and steering harder would be guessing. This is what Z1-R1 needed and did not have.
-    if (_rec && _yaw0Set && _driveSpeed > 0.0f) {
+    if (_rec && _yaw0Set && _runDrive > 0.0f) {
       if (fabsf(_yawErr) >= kErrStopDeg) {
         if (!_errBadSince) _errBadSince = now ? now : 1;
         else if (now - _errBadSince >= kErrStopMs) {
@@ -490,7 +516,7 @@ public:
         ev = "AUTO_STOP";
         snprintf(why, sizeof why, "zone %u time done, %lu:%02lu", (unsigned)_zone,
                  (unsigned long)(runMs / 60000), (unsigned long)((runMs / 1000) % 60));
-      } else if (_driveSpeed > 0.0f && _blockWhere) {
+      } else if (_runDrive > 0.0f && _blockWhere) {
         if (!_blockSince) {
           _blockSince = now ? now : 1;      // 0 means "not blocked", so never store a plain 0
         } else if (now - _blockSince >= kBlockMs) {
@@ -519,8 +545,9 @@ private:
     if (!_fsOk) { note("No flash file system: cannot record."); return; }
     if (_rec)   { note("Stop the current run first."); return; }
     const unsigned k = nextRunNumber(mode);
-    if (mode == 0) snprintf(_run, sizeof _run, "F-R%u", k);
-    else           snprintf(_run, sizeof _run, "Z%u-R%u", (unsigned)mode, k);
+    if (mode == 0)           snprintf(_run, sizeof _run, "F-R%u", k);
+    else if (mode == kBench) snprintf(_run, sizeof _run, "S-R%u", k);
+    else                     snprintf(_run, sizeof _run, "Z%u-R%u", (unsigned)mode, k);
     char dir[16];
     snprintf(dir, sizeof dir, "/%s", _run);
     LittleFS.mkdir(dir);
@@ -533,8 +560,16 @@ private:
     _errBadSince = 0;
     resetRampState();
     _usedAtStart = LittleFS.usedBytes(); _written = 0; _full = false;
+    // Team B4: only an AUTO run drives; the type goes into the first events file.
+    _type = _reqType;
+    _runDrive = _type == TYPE_AUTO ? _driveSpeed : 0.0f;
+    _wpResN = 0; _obstacles = 0;
     _rec = true;
     openZoneFiles(now);
+    char t[48];
+    if (_runDrive > 0.0f) snprintf(t, sizeof t, "%s, forward %.2f", typeName(_type), _runDrive);
+    else                  snprintf(t, sizeof t, "%s, the logger does not drive", typeName(_type));
+    evText(now, "TYPE", t);
     Serial.printf("# start %s, zone %u (%s)\n", _run, (unsigned)_zone, zoneName(_zone));
     note("Recording %s. Press Mark at WP%u.", _run, (unsigned)_wpCount);
   }
@@ -547,7 +582,7 @@ private:
     _rec = false;
     _usedIdle = LittleFS.usedBytes();
     Serial.printf("# stop %s (%s)\n", _run, why);
-    note("Run %s saved - %s. Download it below.", _run, why);
+    note("Run %s saved - %s. Results and files are on the Results tab.", _run, why);
   }
 
   // Full path only: close this zone's files and open the next zone's files.
@@ -625,8 +660,9 @@ private:
 
   unsigned nextRunNumber(uint8_t mode) const {
     char prefix[8];
-    if (mode == 0) snprintf(prefix, sizeof prefix, "F-R");
-    else           snprintf(prefix, sizeof prefix, "Z%u-R", (unsigned)mode);
+    if (mode == 0)           snprintf(prefix, sizeof prefix, "F-R");
+    else if (mode == kBench) snprintf(prefix, sizeof prefix, "S-R");
+    else                     snprintf(prefix, sizeof prefix, "Z%u-R", (unsigned)mode);
     const size_t pl = strlen(prefix);
     unsigned best = 0;
     File root = LittleFS.open("/");
@@ -789,7 +825,7 @@ private:
       if (_avgActive)
         catf(s, n, len, "The waypoint finishes before the run ends\n");
       else
-        catf(s, n, len, "%s in %lu:%02lu\n", _driveSpeed > 0.0f ? "DRIVING FORWARD, stops"
+        catf(s, n, len, "%s in %lu:%02lu\n", _runDrive > 0.0f ? "DRIVING FORWARD, stops"
              : "Saves itself", (unsigned long)(leftSec / 60), (unsigned long)(leftSec % 60));
       if (_avgActive)
         catf(s, n, len, "Averaging WP%u: %lu s left, keep still\n", (unsigned)_wpCount,
@@ -801,7 +837,7 @@ private:
       catf(s, n, len, "Ramps: %u of %u   Front: %u cm%s   GPS fix: %u%%   IMU: %s\n",
            (unsigned)_rampsZone, (unsigned)zoneRamps(_zone), (unsigned)_frontCm,
            kObstacleCheck ? "" : " (no stop)", fixPct, _lastImu ? "ok" : "NOT READY");
-      if (_driveSpeed > 0.0f) {
+      if (_runDrive > 0.0f) {
         if (_yaw0Set)
           catf(s, n, len, "Heading %+.1f of %.1f deg, steering %+.2f\n", _yawErr, _yaw0, _yawCorr);
         else
@@ -835,9 +871,67 @@ private:
     }
     catf(s, n, len, "%s", _note);
     _statusIdx = (uint8_t)(1 - _statusIdx);
+    buildState(now);
   }
 
+  // Team B4: the same status as JSON for the phone page, built here in loop() and double
+  // buffered like the text, so the web task never reads half-written values.
+  void buildState(uint32_t now) {
+    char* s = _state[1 - _stateIdx];
+    const size_t n = sizeof _state[0];
+    size_t len = 0;
+    s[0] = '\0';
+    const uint32_t freeKb = freeBytes() / 1024;
+    const uint32_t zoneMs = _rec ? now - _zoneT0 : 0;
+    const long avgLeft = _avgActive ? (long)((kAvgMs - (now - _avgStart) + 999) / 1000) : -1;
+    catf(s, n, len, "{\"fs\":%d,\"rec\":%d,\"run\":\"%s\",\"mode\":%u,\"zone\":%u,\"type\":%u,"
+         "\"drive\":%.2f,\"cfgDrive\":%.2f,\"zoneMs\":%lu,\"totalMs\":%lu,\"runMs\":%lu,",
+         _fsOk ? 1 : 0, _rec ? 1 : 0, _run, (unsigned)_mode, (unsigned)_zone, (unsigned)_type,
+         _runDrive, _driveSpeed, (unsigned long)zoneMs, (unsigned long)zoneRunMs(_zone),
+         (unsigned long)(_rec ? now - _t0 : 0));
+    catf(s, n, len, "\"wp\":%u,\"wpFirst\":%u,\"wpLast\":%u,\"avgLeft\":%ld,\"ramps\":%u,"
+         "\"rampsExp\":%u,\"obstacles\":%u,\"front\":%u,\"block\":\"%s\",\"obstacleCheck\":%d,",
+         (unsigned)_wpCount, (unsigned)zoneFirstWp(_rec ? _mode : 1), (unsigned)zoneLastWp(_rec ? _mode : 1),
+         avgLeft, (unsigned)_rampsZone, (unsigned)zoneRamps(_zone), (unsigned)_obstacles,
+         (unsigned)_frontCm, _blockWhere ? _blockWhere : "", kObstacleCheck ? 1 : 0);
+    catf(s, n, len, "\"yawRef\":%d,\"yawErr\":%.1f,\"imu\":%d,\"fix\":%d,\"freeKb\":%lu,"
+         "\"freeMin\":%lu,\"full\":%d,\"wps\":[",
+         _yaw0Set ? 1 : 0, _yawErr, _lastImu ? 1 : 0, _lastFix ? 1 : 0, (unsigned long)freeKb,
+         (unsigned long)(freeBytes() / kBytesPerMin), _full ? 1 : 0);
+    for (uint8_t i = 0; i < _wpResN; ++i)
+      catf(s, n, len, "%s{\"wp\":%u,\"res\":%u,\"spread\":%.1f}", i ? "," : "",
+           (unsigned)_wpRes[i].wp, (unsigned)_wpRes[i].res, _wpRes[i].spread);
+    catf(s, n, len, "],\"note\":\"");
+    for (const char* p = _note; *p && len + 8 < n; ++p) {   // JSON string: escape " and backslash
+      if (*p == '"' || *p == '\\') s[len++] = '\\';
+      if ((unsigned char)*p >= 0x20) s[len++] = *p;
+    }
+    s[len] = '\0';
+    catf(s, n, len, "\"}");
+    _stateIdx = (uint8_t)(1 - _stateIdx);
+  }
+
+public:
+  void stateJson(char* out, size_t n) const {
+    strncpy(out, _state[_stateIdx], n - 1);
+    out[n - 1] = '\0';
+  }
+
+private:
+
   size_t bufTotal() const { size_t t = 0; for (uint8_t i = 0; i < F_COUNT; ++i) t += _bufLen[i]; return t; }
+
+  // Team B4: Log obstacle on the phone page - one OBSTACLE row with what the sensors saw ahead.
+  template <class S>
+  void logObstacle(uint32_t now, S& s) {
+    if (!_rec) { note("Press Start first."); return; }
+    ++_obstacles;
+    char m[72];
+    snprintf(m, sizeof m, "logged by hand #%u; front %u cm, US front %u cm",
+             (unsigned)_obstacles, (unsigned)_frontCm, (unsigned)s.usCm(0));
+    evText(now, "OBSTACLE", m);
+    note("Obstacle %u logged, front %u cm.", (unsigned)_obstacles, (unsigned)_frontCm);
+  }
 
   // ---------- waypoints ----------
   void markWaypoint(uint32_t now) {
@@ -859,6 +953,7 @@ private:
     if (_avgActive) { _avgActive = false; evText(now, "WP_CANCELLED", "undo"); note("Averaging cancelled."); return; }
     if (_wpCount <= _wpZoneStart) { note("No waypoint of this zone to remove."); return; }
     --_wpCount;
+    if (_wpResN && _wpRes[_wpResN - 1].wp == _wpCount) --_wpResN;
     char s[48];
     snprintf(s, sizeof s, "WP%u removed", (unsigned)_wpCount);
     evText(now, "UNDO", s);
@@ -903,6 +998,9 @@ private:
     Serial.printf("# WP%u %s spread %.1f m\n", (unsigned)_wpCount, verdict, spread);
     if (!_pitch0Set && !_moved && _yawN) { _pitch0 = _sumPitch / _yawN; _pitch0Set = true; }
     const uint8_t done = _wpCount++;
+    // Team B4: kept for the phone page's checkpoint list (stateJson); undo removes it again.
+    if (_wpResN < kMaxWaypoints)
+      _wpRes[_wpResN++] = {done, (uint8_t)(!_n ? 2 : (_moved ? 1 : 0)), spread};
     if (!ok) { note("WP%u: %s.", (unsigned)done, verdict); return; }
     if (done >= zoneLastWp(_zone) && (_mode != 0 || _zone == 4))
       note("WP%u saved, spread %.1f m. %s done: press Stop and save.", (unsigned)done, spread,
@@ -994,7 +1092,7 @@ private:
   // Called every pass; autoDrive() applies the result, so the correction is always one loop pass
   // old - a few milliseconds against a yaw that only moves at 4 Hz.
   void headingStep(float yaw, bool imu) {
-    if (!_rec || _driveSpeed <= 0.0f || !_yaw0Set || !imu || isnan(yaw)) {
+    if (!_rec || _runDrive <= 0.0f || !_yaw0Set || !imu || isnan(yaw)) {
       _yawCorr = 0;         // no heading to hold: drive both wheels the same
       _yawErr = 0;
       return;
@@ -1187,12 +1285,20 @@ private:
   uint32_t _gpsN = 0, _gpsFixN = 0;
   // web requests
   volatile bool    _reqStart = false, _reqStop = false, _reqMark = false, _reqUndo = false,
-                   _reqNext = false, _reqDelete = false;
-  volatile uint8_t _reqMode = 1;
+                   _reqNext = false, _reqDelete = false, _reqObstacle = false;
+  volatile uint8_t _reqMode = 1, _reqType = TYPE_AUTO;
   char     _delName[16] = {0};
   // status (double buffer)
   char     _status[2][448] = {{0}, {0}};
   volatile uint8_t _statusIdx = 0;
+  // Team B4: run type, its drive speed, checkpoint results and obstacles, and the JSON status
+  uint8_t  _type = TYPE_AUTO;
+  float    _runDrive = 0;     // forward speed of THIS run: _driveSpeed for AUTO, else 0
+  struct WpRes { uint8_t wp, res; float spread; };   // res: 0 ok, 1 moved, 2 no GPS fix
+  WpRes    _wpRes[kMaxWaypoints];
+  uint8_t  _wpResN = 0, _obstacles = 0;
+  char     _state[2][1536] = {{0}, {0}};
+  volatile uint8_t _stateIdx = 0;
   uint32_t _lastStatus = 0;
   char     _note[96] = {0};
   bool     _lastFix = false, _lastImu = false;
