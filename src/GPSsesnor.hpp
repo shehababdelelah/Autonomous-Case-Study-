@@ -1,5 +1,5 @@
 #pragma once
-// GpsManager - GY-GPS6MV2 (u-blox NEO-6M) on Serial2, GPIO16 RX / GPIO17 TX, 9600 baud.
+// GPSsensor - GY-GPS6MV2 (u-blox NEO-6M) on Serial2, GPIO16 RX / GPIO17 TX, 9600 baud.
 //
 // poll() feeds all received NMEA characters into TinyGPSPlus; the getters return the latest
 // decoded values. charsReceived() > 0 shows that the module talks at all (useful indoors, where
@@ -7,10 +7,11 @@
 #include <Arduino.h>
 #include <TinyGPSPlus.h>
 
-class GpsManager {
+class GPSsensor {
 public:
   void begin();
-  void poll();  // call every loop pass, reads everything waiting on the UART
+  void poll();  // drain the UART; called by sensorTask
+  String toJson();
 
   // (not const: the TinyGPSPlus getters are not const)
   bool hasFix();               // valid position not older than 3 s

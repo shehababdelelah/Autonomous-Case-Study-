@@ -3,14 +3,14 @@
 //
 // The rover joins the box access point as a station and runs its unchanged Waveshare firmware.
 // Commands are JSON sent to its HTTP endpoint: GET http://<rover>/js?json={"T":1,"L":..,"R":..}
-// All network I/O runs in an own FreeRTOS task on core 0, so loop() never waits for the rover.
+// All network I/O runs in its own FreeRTOS task on core 0, so application tasks never wait for the rover.
 //
 //   rover.begin();
-//   rover.setDrive(l, r);  // call every loop pass; the task sends it every 100 ms ("T":1)
+//   rover.setDrive(l, r);  // refresh the setpoint; the task sends it every 100 ms ("T":1)
 //
 // When l = r = 0 the task sends stops until the rover confirmed three of them, then every
 // 500 ms alternately repeats the stop and polls the rover status ("T":130, battery voltage).
-// Deadman: a set point older than 500 ms counts as 0/0, so the rover stops even if loop() hangs. The rover itself also stops after 3 s without a command.
+// Deadman: a setpoint older than 500 ms counts as 0/0. The rover itself also stops after 3 s without a command.
 #include <Arduino.h>
 #include <WiFi.h>
 
@@ -40,7 +40,7 @@ private:
   float _setL = 0, _setR = 0;
   uint32_t _setMs = 0;
 
-  // written by the task, read by loop(); 32-bit values are atomic on the ESP32
+  // written by the task; 32-bit values are atomic on the ESP32
   volatile uint32_t _ipRaw = 0;
   volatile float _voltage = 0, _rttMs = 0;
   volatile uint32_t _ok = 0, _fail = 0;

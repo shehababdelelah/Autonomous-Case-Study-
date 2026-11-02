@@ -9,8 +9,9 @@
 //
 //      phone ──Wi-Fi──► box (this program): web page, sensors ──Wi-Fi──► rover (motors)
 //
-//    Web page: drive pad (hold a key = drive, release = stop), speed slider, LiDAR top view,
-//    ultrasonic distances, IMU (roll/pitch/yaw), GPS. "Dev" (top right) shows raw values.
+//    Web page: tap a direction to move for the selected duration; Stop cancels immediately.
+//      Includes speed/duration sliders, LiDAR top view, ultrasonic distances, IMU
+//      (roll/pitch/yaw), GPS. "Dev" (top right) shows raw values.
 //
 //  BEFORE YOU FLASH: set BOX_ID below to the number of your kit (sticker on box and rover).
 //    Everything else follows from it - do not change the naming scheme:
@@ -24,152 +25,139 @@
 //  START ORDER: switch on the box first, then the rover (the rover looks for its box only
 //    while it boots). Phone: join CAS-Box-<NN>, open the web page.
 //
-//  ARDUINO IDE: board "ESP32 Dev Module", ESP32 core 3.3.x, default partition scheme.
-//    Required libraries and versions: README.md. Serial monitor: 115200 baud.
+//  BUILD: open the project root in VS Code with PlatformIO; configuration/dependencies are in
+//    platformio.ini. The serial monitor runs at 115200 baud.
 //
 //  FILES
-//    cas_box.ino        this file: settings, setup(), loop()
+//    main.cpp           settings, setup(), and FreeRTOS application tasks
 //    RoverLink.*        box -> rover link (sends drive commands, reads battery voltage)
-//    Sensors.*          all sensors behind one object (ultrasonic, LiDAR, IMU, GPS)
-//    LidarScan.h        LiDAR (LD20) reader with noise filtering
-//    WebHMI.*           web server and web page
-//    UsManager.*        5 ultrasonic sensors (HC-SR04), measured in a background task
-//    ImuManager.*       orientation sensor BNO055 (roll / pitch / yaw in the ISO 8855 vehicle frame)
-//    GpsManager.*       GPS module NEO-6M
-//    DisplayManager.*   small OLED on the box
+//    LidarSceneor.*     LiDAR reader, filtered scan, and CSV logger
+//    IMUSensor.*        BNO055 orientation and calibration readings
+//    Ultrasonics.*      five HC-SR04 sensors and their background task
+//    RoverLink.*        Wi-Fi connection and commands to the rover
+//    GPSsesnor.*        NEO-6M GPS module
+//    LCDDisplay.*       small OLED
+//    WEBpage.*          access point, web server, and page
 //
 //  SAFETY / BEHAVIOUR
-//    The rover stops when you release the key, when the page loses focus, when the box gets no
-//    update from the phone for 0.4 s, when RoverLink gets no new set point for 0.5 s, and - in
-//    the rover itself - after 3 s without a command. Do not remove these stops.
+//    Timed drive-pad motion stops at its selected duration; Stop, page loss of focus, or no
+//    update from the phone for 0.4 s also stops it. RoverLink stops after 0.5 s without a
+//    setpoint, and the rover itself stops after 3 s without a command. Do not remove these stops.
 //    The rover firmware must not be changed.
 // =============================================================================================
 
-#include "WebHMI.h"
-#include "RoverLink.h"
-#include "Sensors.h"
-#include "DisplayManager.h"
-// Team B4: Strict parsing and finite-number validation for serial speed values.
-#include <stdlib.h>
+#include "WEBpage.hpp"
+#include "RoverLink.hpp"
+#include "LidarSensor.hpp"
+#include "IMUSensor.hpp"
+#include "Ultrasonics.hpp"
+#include "GPSsesnor.hpp"
+#include "LCDDisplay.hpp"
 #include <math.h>
-#include "TestLogger.h"
-#include "NavLidar.h"      // 2D LiDAR geometry for autonomous navigation
-#include "NavSurvey.h"     // live LiDAR survey, for calibrating NavCal on site
-
-TestLogger testLog;                 // global, next to sensors, rover, hmi
-// Team B4: Calibration survey. navCal holds the building measurements the landmark detectors
-// need; every value marked MEASURE in NavLidar.h is still a placeholder. Read the real ones
-// off http://192.168.18.1/survey at each landmark and put them here.
-NavCal navCal;
-NavSurvey navSurvey;
-
+#include <Wire.h>
 // ---- YOUR KIT ------------------------------------------------------------------------------
 const int BOX_ID = 8;                     // 1..10 = kit number on the box
 
 // ---- settings --------------------------------------------------------------------------------
-const float MAX_SPEED = 0.5f;             // drive pad maximum; 0.5 = full rover speed (100 % PWM)
-// Team B4: Forward speed of the automatic zone test. Note the scale: 0.5 is full speed here, so
-// 0.3 is 60 % PWM, not 30 %. Use 0.15 if you want 30 % of full speed.
-const float TEST_SPEED = 0.3f;
+constexpr float MAX_SPEED = 0.5f;         // drive pad maximum; 0.5 = full rover speed (100 % PWM)
 const uint32_t PAD_TIMEOUT_MS = 400;      // no update from the phone for this long -> stop
-// Team B4: Serial Monitor test speed and automatic stop timeout.
-const float SERIAL_TEST_SPEED = 0.2f;     // speed for Serial Monitor tests
-// Team B4: Run each serial movement command for five seconds, then stop automatically.
-const uint32_t SERIAL_TIMEOUT_MS = 5000;
+constexpr uint16_t TARGET_WALL_CM = 130;
+constexpr uint16_t MAX_WALL_DISTANCE_CM = 245;
+constexpr uint16_t STOP_DISTANCE_CM = 30;
+constexpr uint16_t WALL_DEADBAND_CM = 5;
+constexpr float CORRECTION_PER_CM = 0.0025f;
+constexpr float MAX_CORRECTION = 0.08f;
+constexpr uint8_t WALL_FIRST_BIN = 63;
+constexpr uint8_t WALL_BIN_COUNT = 10;
+constexpr uint8_t FRONT_FIRST_BIN = 86;
+constexpr uint8_t FRONT_BIN_COUNT = 8;
+constexpr uint32_t LIDAR_MAX_AGE_MS = 500;
+constexpr uint32_t WALL_DIAGNOSTIC_PERIOD_MS = 250;
 const int LIDAR_OFFSET_DEG = 90;          // rotates the LiDAR view so that "front" is up
+const uint32_t SENSOR_TASK_PERIOD_MS = 2;
+const uint32_t UI_TASK_PERIOD_MS = 10;
+const uint32_t DRIVE_TASK_PERIOD_MS = 20;
 
 // ---- objects ---------------------------------------------------------------------------------
-WebHMI hmi;           // web server + page
+WEBpage hmi;           // web server + page
 RoverLink rover;      // connection to the rover
-Sensors sensors;      // all box sensors
-DisplayManager disp;  // small OLED on the box
+LidarSceneor lidar;
+IMUSensor imu;
+Ultrasonics ultrasonics;
+GPSsensor gps;
+LCDDisplay disp;  // small OLED on the box
 bool oledReady = false;
 char boxSsid[16], boxPassword[16];
-// Team B4: State for serial control; 'w' returns control to the web page.
-bool serialDriveMode = false;             // first serial direction takes control; 'w' returns to web
-float serialLeft = 0, serialRight = 0;
-uint32_t serialDriveMs = 0;
 
-// Team B4: Parse a complete line, e.g. f0.3 or l 0.4; a letter alone uses the default speed.
-void applySerialDrive(String command) {
-    command.trim();
-    if (command.length() == 0) return;
-    char c = command[0];
-    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
-    String value = command.substring(1);
-    value.trim();
-    float s = SERIAL_TEST_SPEED;
-    bool valid = c == 'f' || c == 'b' || c == 'l' || c == 'r' || c == 's' || c == 'w';
-    if (value.length() > 0) {
-      char* end = nullptr;
-      s = strtof(value.c_str(), &end);
-      valid = valid && end != value.c_str() && *end == '\0' && isfinite(s)
-              && s >= 0.0f && s <= MAX_SPEED && c != 's' && c != 'w';
+static uint16_t medianBins(const uint16_t* distances, uint8_t first, uint8_t count,
+                           uint8_t minimumSamples) {
+  uint16_t values[LidarSceneor::kPointCount];
+  uint8_t valid = 0;
+  for (uint8_t offset = 0; offset < count; ++offset) {
+    const uint16_t distance = distances[(first + offset) % LidarSceneor::kPointCount];
+    if (!distance) continue;
+    uint8_t insertAt = valid;
+    while (insertAt && values[insertAt - 1] > distance) {
+      values[insertAt] = values[insertAt - 1];
+      --insertAt;
     }
-    if (!valid) {
-      serialDriveMode = true;
-      serialLeft = serialRight = 0;
-      Serial.println("[Team B4] Invalid command: stopped. Use f0.3 / b0.3 / l0.3 / r0.3, speed 0..0.5, s=stop, w=web.");
-      return;
-    }
-    if (c == 'w') {
-      serialDriveMode = false;
-      serialLeft = serialRight = 0;
-      Serial.println("[drive] Web control enabled");
-      return;
-    }
-    s = constrain(s, 0.0f, MAX_SPEED);
-    switch (c) {
-      case 'f': serialLeft = s;  serialRight = s;  break;
-      case 'b': serialLeft = -s; serialRight = -s; break;
-      case 'l': serialLeft = -s; serialRight = s;  break;
-      case 'r': serialLeft = s;  serialRight = -s; break;
-      case 's': serialLeft = 0;  serialRight = 0;  break;
-      default:
-        serialLeft = serialRight = 0;
-        Serial.println("[drive] Unknown command: stopped. Use f/b/l/r/s, w=web");
-        break;
-    }
-    serialDriveMode = true;
-    serialDriveMs = millis();
-    Serial.printf("[drive] %c -> L=%.2f R=%.2f (timeout %lu ms)\n",
-                  c, serialLeft, serialRight, (unsigned long)SERIAL_TIMEOUT_MS);
-    // Team B4: Distinguish received serial input from an available rover Wi-Fi link.
-    Serial.printf("[Team B4] %s; HTTP ok=%lu fail=%lu\n",
-                  rover.statusText().c_str(), (unsigned long)rover.okCount(),
-                  (unsigned long)rover.failCount());
-    if (!rover.connected()) {
-      Serial.println("[Team B4] Rover not connected: power the box first, then restart the rover. Check BOX_ID.");
-      // Team B4: Do not leave a movement command pending while the rover is disconnected.
-      serialLeft = serialRight = 0;
-    }
-}
-
-// Team B4: Nonblocking line input; CR/LF completes a command. Discard oversized lines safely.
-void readSerialDrive() {
-  static String line;
-  static bool overflow = false;
-  while (Serial.available() > 0) {
-    char c = Serial.read();
-    if (c == '\r' || c == '\n') {
-      if (!overflow) applySerialDrive(line);
-      line = "";
-      overflow = false;
-    } else if (!overflow) {
-      if (line.length() < 31) {
-        line += c;
-      } else {
-        overflow = true;
-        line = "";
-        serialDriveMode = true;
-        serialLeft = serialRight = 0;
-        Serial.println("[Team B4] Command too long: stopped. Send a new line.");
-      }
-    }
+    values[insertAt] = distance;
+    ++valid;
   }
+  if (valid < minimumSamples) return 0;
+  return (values[(valid - 1) / 2] + values[valid / 2]) / 2;
 }
 
-// OLED: Wi-Fi name, web address, rover state. Started only when the display answers on I2C.
+static uint16_t nearestBins(const uint16_t* distances, uint8_t first, uint8_t count,
+                            uint8_t minimumSamples) {
+  uint16_t nearest = UINT16_MAX;
+  uint8_t valid = 0;
+  for (uint8_t offset = 0; offset < count; ++offset) {
+    const uint16_t distance = distances[(first + offset) % LidarSceneor::kPointCount];
+    if (!distance) continue;
+    if (distance < nearest) nearest = distance;
+    ++valid;
+  }
+  return valid >= minimumSamples ? nearest : 0;
+}
+
+static String sensorJson() {
+  const IMUReading reading = imu.read();
+  String json;
+  json.reserve(1000);
+  json = "{\"us\":";
+  json += ultrasonics.toJson();
+  json += ",\"usMax\":"; json += 300;
+  json += ",\"lidar\":"; json += lidar.toJson();
+  json += ",\"imu\":{\"ok\":";
+  json += reading.initialized ? "true" : "false";
+  json += ",\"sample\":"; json += reading.hasSample ? "true" : "false";
+  json += ",\"timestampMs\":";
+  if (reading.hasSample) json += reading.timestampMs;
+  else json += "null";
+  json += ",\"ageMs\":";
+  if (reading.hasSample) json += millis() - reading.timestampMs;
+  else json += "null";
+  json += ",\"heading\":"; json += String(reading.headingDeg, 1);
+  json += ",\"roll\":"; json += String(reading.rollDeg, 1);
+  json += ",\"pitch\":"; json += String(reading.pitchDeg, 1);
+  json += ",\"cal\":[";
+  json += reading.systemCalibration; json += ',';
+  json += reading.gyroCalibration; json += ',';
+  json += reading.accelCalibration; json += ',';
+  json += reading.magCalibration;
+  json += "]}";
+  json += ",\"gps\":"; json += gps.toJson();
+  json += '}';
+  return json;
+}
+
+static bool i2cPresent(uint8_t address) {
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+}
+
+// OLED shares the I2C bus with the IMU and is therefore updated by sensorTask only.
 void updateOled() {
   static uint32_t lastTry = 0;
   if (!oledReady) {
@@ -183,17 +171,177 @@ void updateOled() {
   disp.show(boxSsid, ip.c_str(), r.c_str());
 }
 
+// Sensor/UI data task (core 1).
+// Polls each sensor module directly. Every 250 ms it
+// publishes the sensor JSON for the web page. Every second it refreshes the OLED, sharing
+// I2C access with the IMU in this task. Every 10 seconds it prints a sensor/heap status report.
+// The 2 ms delay gives other FreeRTOS tasks time to run; individual sensor managers enforce
+// their own slower sampling intervals.
+static void sensorTask(void*) {
+  uint32_t lastSnapshot = 0;
+  uint32_t lastOled = 0;
+  uint32_t lastReport = 0;
+
+  for (;;) {
+    lidar.update();
+    gps.poll();
+    imu.update();
+    const uint32_t now = millis();
+
+    if (now - lastSnapshot >= 250) {
+      lastSnapshot = now;
+      hmi.setSensorJson(sensorJson());
+      SensorLogSnapshot logSnapshot;
+      const IMUReading reading = imu.read();
+      logSnapshot.timestampMs = now;
+      logSnapshot.imuOk = reading.initialized && reading.hasSample &&
+                          isfinite(reading.headingDeg) && isfinite(reading.rollDeg) &&
+                          isfinite(reading.pitchDeg);
+      logSnapshot.headingDeg = reading.headingDeg;
+      logSnapshot.rollDeg = reading.rollDeg;
+      logSnapshot.pitchDeg = reading.pitchDeg;
+      logSnapshot.calibration[0] = reading.systemCalibration;
+      logSnapshot.calibration[1] = reading.gyroCalibration;
+      logSnapshot.calibration[2] = reading.accelCalibration;
+      logSnapshot.calibration[3] = reading.magCalibration;
+      logSnapshot.lidarOk = lidar.ok();
+      logSnapshot.lidarPacketsPerSecond = lidar.packetsPerSecond();
+      logSnapshot.lidarFrontCm = lidar.medianSector(0);
+      logSnapshot.lidarRightCm = lidar.medianSector(22);
+      logSnapshot.lidarLeftCm = lidar.medianSector(67);
+      lidar.copyDistances(logSnapshot.lidarCm, kSensorLogLidarPoints);
+      hmi.recordSensorSnapshot(logSnapshot);
+      hmi.setLidarTestSnapshot(logSnapshot.lidarFrontCm, logSnapshot.lidarRightCm,
+                               logSnapshot.lidarLeftCm, logSnapshot.lidarPacketsPerSecond);
+    }
+    if (now - lastOled >= 1000) {
+      lastOled = now;
+      updateOled();
+    }
+    if (now - lastReport >= 10000) {
+      Serial.printf("[sys] sensor task, heap %lu kB, rover %s\n",
+                    (unsigned long)(ESP.getFreeHeap() / 1024),
+                    rover.connected() ? "ok" : "searching");
+      Serial.printf("[sys] %s\n", sensorJson().c_str());
+      lastReport = now;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(SENSOR_TASK_PERIOD_MS));
+  }
+}
+
+// Web status task (core 1).
+// Calls hmi.tick() every 10 ms to measure this task's timing. Every 500 ms it updates the web
+// page's rover status, connection statistics, battery voltage, and free-heap value. It does
+// not handle HTTP requests itself: ESPAsyncWebServer runs those asynchronously.
+static void uiTask(void*) {
+  uint32_t lastUi = 0;
+  TickType_t wakeTime = xTaskGetTickCount();
+
+  for (;;) {
+    hmi.tick();
+    const uint32_t now = millis();
+    if (now - lastUi >= 500) {
+      lastUi = now;
+      hmi.setStateText(rover.statusText());
+      hmi.showValue("rover.ip", rover.ip().toString());
+      hmi.showValue("rover.voltage_V", rover.voltage());
+      hmi.showValue("rover.rtt_ms", rover.rttMs());
+      hmi.showValue("rover.ok", (double)rover.okCount());
+      hmi.showValue("rover.fail", (double)rover.failCount());
+      hmi.showValue("sys.heap_kB", ESP.getFreeHeap() / 1024.0);
+    }
+
+    vTaskDelayUntil(&wakeTime, pdMS_TO_TICKS(UI_TASK_PERIOD_MS));
+  }
+}
+
+// Motor-command owner (core 1). IMU readings do not affect motor commands.
+static void driveTask(void*) {
+  uint32_t lastWallDiagnostic = 0;
+  for (;;) {
+    float left = 0, right = 0;
+    float wallSpeed = 0;
+    bool safetyStopped = false;
+    if (hmi.getWallFollow(wallSpeed)) {
+      uint16_t distances[LidarSceneor::kPointCount] = {};
+      lidar.copyDistances(distances, LidarSceneor::kPointCount);
+      const uint16_t wallCm = medianBins(distances, WALL_FIRST_BIN, WALL_BIN_COUNT, 4);
+      const uint16_t frontCm = nearestBins(distances, FRONT_FIRST_BIN, FRONT_BIN_COUNT, 2);
+      const uint32_t scanAgeMs = lidar.scanAgeMs();
+      const char* stopReason = nullptr;
+      float correction = 0;
+
+      if (!lidar.ok() || scanAgeMs > LIDAR_MAX_AGE_MS) {
+        stopReason = "LiDAR unavailable or scan stale";
+      } else if (!wallCm) {
+        stopReason = "Left wall not detected";
+      } else if (wallCm <= STOP_DISTANCE_CM) {
+        stopReason = "Left wall inside stop distance";
+      } else if (wallCm > MAX_WALL_DISTANCE_CM) {
+        stopReason = "Left wall too far";
+      } else if (!frontCm) {
+        stopReason = "Insufficient front LiDAR returns";
+      } else if (frontCm <= STOP_DISTANCE_CM) {
+        stopReason = "Front obstacle inside stop distance";
+      }
+
+      if (stopReason) {
+        hmi.stopWallFollow(stopReason);
+        rover.setDrive(0, 0);
+        hmi.setWallFollowDiagnostics(wallCm, frontCm, 0, 0, 0, wallSpeed, stopReason);
+        safetyStopped = true;
+      } else {
+        const int16_t errorCm = (int16_t)TARGET_WALL_CM - (int16_t)wallCm;
+        if (abs(errorCm) > WALL_DEADBAND_CM) {
+          correction = constrain(errorCm * CORRECTION_PER_CM,
+                                 -MAX_CORRECTION, MAX_CORRECTION);
+        }
+        left = constrain(wallSpeed + correction, 0.0f, MAX_SPEED);
+        right = constrain(wallSpeed - correction, 0.0f, MAX_SPEED);
+        const uint32_t now = millis();
+        if (now - lastWallDiagnostic >= WALL_DIAGNOSTIC_PERIOD_MS) {
+          lastWallDiagnostic = now;
+          hmi.setWallFollowDiagnostics(wallCm, frontCm, correction, left, right,
+                                       wallSpeed, "Following left wall");
+        }
+      }
+    } else {
+      float turnSpeed = 0;
+      uint32_t turnRemainingMs = 0;
+      if (hmi.getRightTurnTest(turnSpeed, turnRemainingMs)) {
+        left = turnSpeed;
+        right = -turnSpeed;
+      } else {
+        float movementSpeed = 0;
+        if (hmi.getMovementDrive(movementSpeed)) {
+          left = right = constrain(movementSpeed, 0.0f, MAX_SPEED);
+        } else {
+          uint32_t ageMs;
+          hmi.getDrive(left, right, ageMs);
+          if (ageMs > PAD_TIMEOUT_MS) left = right = 0;
+        }
+      }
+    }
+    if (!safetyStopped) rover.setDrive(left, right);
+
+    vTaskDelay(pdMS_TO_TICKS(DRIVE_TASK_PERIOD_MS));
+  }
+}
+
+static bool startApplicationTask(TaskFunction_t entry, const char* name,
+                                 uint32_t stackBytes, UBaseType_t priority) {
+  if (xTaskCreatePinnedToCore(entry, name, stackBytes, nullptr, priority, nullptr, 1) == pdPASS) {
+    return true;
+  }
+  Serial.printf("[startup] failed to create %s task\n", name);
+  return false;
+}
+
+
 void setup() {
   Serial.begin(115200);
   delay(200);
-  testLog.begin();                  // mounts the flash file system
-  // Team B4: Explain direction-plus-speed commands and required Serial Monitor line ending.
-  Serial.println("[Team B4] Serial: f0.3 / b0.3 / l0.3 / r0.3; speed 0..0.5; s=stop w=web");
-  Serial.println("[Team B4] Select Newline or Both NL & CR in Serial Monitor, then send a command.");
-  // Team B4: Show the configured movement duration; a new command restarts the timer.
-  Serial.printf("[drive] Movement stops after %lu ms; s=stop immediately.\n",
-                (unsigned long)SERIAL_TIMEOUT_MS);
-
   // naming scheme, derived from BOX_ID only (see header)
   snprintf(boxSsid, sizeof(boxSsid), "CAS-Box-%02d", BOX_ID);
   snprintf(boxPassword, sizeof(boxPassword), "CASbox%02d", BOX_ID);
@@ -204,98 +352,24 @@ void setup() {
   hmi.setStateText("Starting ...");
   hmi.begin(boxSsid, boxPassword, IPAddress(192, 168, 10 + BOX_ID, 1), channel);
 
-  sensors.begin(LIDAR_OFFSET_DEG);
-  rover.begin(100);  // sends the current drive command every 100 ms
+  imu.begin();
+  ultrasonics.begin(300, 17500);
+  lidar.begin(LIDAR_OFFSET_DEG);
+  gps.begin();
+  const bool tasksStarted =
+      // Sensor and UI tasks run on core 1; driveTask owns application-level motor commands.
+      startApplicationTask(sensorTask, "sensor", 6144, 2) &&
+      startApplicationTask(uiTask, "ui", 4096, 1) &&
+      startApplicationTask(driveTask, "drive", 3072, 2);
 
-  // Team B4: Start on the test page drives the rover forward at TEST_SPEED for the whole run,
-  // holding its heading with the yaw. Pass 0 here to go back to a passive logger that only
-  // records what you drive by hand.
-  testLog.setTestDrive(TEST_SPEED);
+  // Start the rover link even if task allocation failed: its default setpoint is stop.
+  rover.begin(100);  // sends the current drive command every 100 ms
+  if (!tasksStarted) Serial.println("[startup] application tasks incomplete; rover remains stopped");
 }
 
+
+
 void loop() {
-  uint32_t t0 = micros();
-  hmi.tick();
-  sensors.update();
-
-  // ---- driving -------------------------------------------------------------------------------
-  // Manual driving from the phone. For your own (autonomous) behaviour, compute l and r
-  // yourself from the sensors, e.g. sensors.usCm(0) = front ultrasonic in cm, and call
-  // rover.setDrive(l, r) every loop pass (range -0.5..0.5 per side).
-  float l, r;
-  uint32_t age;
-  hmi.getDrive(l, r, age);
-  // Team B4: A fresh zero from the pad is the red Stop button. Remember it before the automatic
-  // test overwrites l and r, so Stop on the driving page always ends a running test.
-  const bool padStop = age <= PAD_TIMEOUT_MS && l == 0 && r == 0;
-  if (age > PAD_TIMEOUT_MS) l = r = 0;  // key released, page closed or phone gone
-  // Team B4: Apply serial commands while serial control is active, with an automatic stop.
-  readSerialDrive();
-  if (serialDriveMode) {
-    l = serialLeft;
-    r = serialRight;
-    // Team B4: Report the automatic stop once, then clear the expired serial speeds.
-    if (millis() - serialDriveMs > SERIAL_TIMEOUT_MS) {
-      if (serialLeft != 0 || serialRight != 0) {
-        Serial.println("[Team B4] Serial timeout: motors stopped; send another direction to test again.");
-      }
-      serialLeft = serialRight = 0;
-      l = r = 0;
-    }
-  }
-  // Team B4: A running zone test drives itself and takes priority over the pad and over serial
-  // control, so it behaves the same however the box was being driven before. It ends on its own
-  // 30 s timer, on an obstacle in front, on Stop on the test page, or on the red Stop here.
-  if (padStop && testLog.isRecording()) testLog.requestStop();
-  float testL, testR;
-  if (testLog.autoDrive(sensors, testL, testR)) { l = testL; r = testR; }
-  rover.setDrive(l, r);
-
-  // ---- web page and OLED -----------------------------------------------------------------------
-  uint32_t now = millis();
-  static uint32_t lastSnap = 0, lastUi = 0, lastOled = 0;
-  if (now - lastSnap >= 250) {  // sensor snapshot for the page, 4 times per second
-    lastSnap = now;
-    hmi.setSensorJson(sensors.toJson());
-  }
-  if (now - lastUi >= 500) {  // status line + values in the "Dev" view
-    lastUi = now;
-    hmi.setStateText(rover.statusText());
-    hmi.showValue("rover.ip", rover.ip().toString());
-    hmi.showValue("rover.voltage_V", rover.voltage());
-    hmi.showValue("rover.rtt_ms", rover.rttMs());
-    hmi.showValue("rover.ok", (double)rover.okCount());
-    hmi.showValue("rover.fail", (double)rover.failCount());
-    hmi.showValue("sys.heap_kB", ESP.getFreeHeap() / 1024.0);
-    // Team B4: What the box is actually commanding, so "it records but does not move" can be
-    // told apart: drive.l/r non-zero means the logger asked and the rover link is the problem.
-    hmi.showValue("drive.l", l);
-    hmi.showValue("drive.r", r);
-    hmi.showValue("test.recording", String(testLog.isRecording() ? "yes" : "no"));
-  }
-  if (now - lastOled >= 1000) {
-    lastOled = now;
-    updateOled();
-  }
-
-  // ---- load report on Serial every 10 s (loop time, free memory, sensor snapshot) -------------
-  static uint32_t lastRep = 0, n = 0, maxUs = 0;
-  static uint64_t sumUs = 0;
-  uint32_t dt = micros() - t0;
-  n++; sumUs += dt; if (dt > maxUs) maxUs = dt;
-  if (now - lastRep >= 10000) {
-    Serial.printf("[sys] loop avg %.2f ms max %.1f ms, heap %u kB, rover %s\n",
-                  sumUs / 1000.0 / n, maxUs / 1000.0, ESP.getFreeHeap() / 1024,
-                  rover.connected() ? "ok" : "searching");
-    Serial.printf("[sys] %s\n", sensors.toJson().c_str());
-    lastRep = now; n = 0; sumUs = 0; maxUs = 0;
-  }
-  delay(2);
-
-  // Team B4: Log the command that was actually sent this pass. update() also runs the test's own
-  // clock, so it has to be called every pass, recording or not.
-  testLog.update(sensors, l, r);
-  // Team B4: Survey report, built here on core 1 so it never reads the LiDAR bins while
-  // Sensors is writing them. The web task only ever reads the published half.
-  navSurvey.update(sensors, navCal);
+  // Application work is performed by FreeRTOS tasks; Arduino's loop only yields.
+  vTaskDelay(pdMS_TO_TICKS(1000));
 }

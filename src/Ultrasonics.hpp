@@ -1,5 +1,5 @@
 #pragma once
-// UsManager - the five HC-SR04 ultrasonic sensors of the box.
+// Ultrasonics - the five HC-SR04 ultrasonic sensors of the box.
 //
 // A background task (core 0) measures the sensors one after another (no cross-talk) and keeps
 // the last distance of each; the read functions only return these cached values and never block.
@@ -7,7 +7,7 @@
 // Echo lines go through a 1k/2k voltage divider (5 V sensor -> 3.3 V ESP32).
 #include <Arduino.h>
 
-class UsManager {
+class Ultrasonics {
 public:
   // GPIO pins (trigger / echo) as wired on the box PCB
   struct Pins {
@@ -28,6 +28,8 @@ public:
   int readRightCm() const { return _rightCm; }
   int readBackCm() const { return _backCm; }
   int readFrontAngledCm() const { return _frontAngledCm; }
+  int maxDistanceCm() const { return _maxDistanceCm; }
+  String toJson() const;
 
 private:
   int _measureCm(int trigPin, int echoPin);  // one blocking measurement (task only)
@@ -39,6 +41,6 @@ private:
   uint32_t _timeoutUs = 17500;
   TaskHandle_t _task = nullptr;
 
-  // written by the task, read by loop(); int reads/writes are atomic on the ESP32
+  // Written by the task and read by sensorTask; int reads/writes are atomic on the ESP32.
   volatile int _frontCm = 0, _leftCm = 0, _rightCm = 0, _backCm = 0, _frontAngledCm = 0;
 };
