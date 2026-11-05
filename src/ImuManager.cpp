@@ -4,7 +4,7 @@
 #include <Adafruit_BNO055.h>
 
 static const uint8_t kBnoAddr = 0x28;
-static const uint32_t kUpdatePeriodMs = 100;
+static const uint32_t kUpdatePeriodMs = 50;   // 20 Hz: the heading hold needs fresh yaw
 static const uint16_t kNorthAlignMs = 3000;
 
 static Adafruit_BNO055 bno(55, kBnoAddr, &Wire);

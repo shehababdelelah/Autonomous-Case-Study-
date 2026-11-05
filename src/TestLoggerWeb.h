@@ -4,7 +4,7 @@
 // (best on the Logger's phone; the Operator keeps the driving page).
 //
 //   Zone 1..4               choose before Start; one zone is one test. Each button shows how
-//                           long that zone records: 1:30, 3:00, 2:00 and 1:00.
+//                           long that zone records: 10:00, 3:00, 2:00 and 1:00.
 //   Start test              new run folder, e.g. Z1-R2. Drives the rover straight forward at
 //                           full speed and records for that zone's time, then stops and saves by
 //                           itself, so one press is the whole test for that zone. It also stops
@@ -47,7 +47,7 @@ ul{margin:6px 0;padding-left:18px}li{margin:4px 0}
 <h2>Zone tests</h2>
 <pre id="st">Connecting...</pre>
 <div class="zones">
-<button class="z sel" data-z="1">Zone 1<small>B to C, R1<br>1:30</small></button>
+<button class="z sel" data-z="1">Zone 1<small>B to C, R1<br>10:00</small></button>
 <button class="z" data-z="2">Zone 2<small>F to E, R2<br>3:00</small></button>
 <button class="z" data-z="3">Zone 3<small>D/E to K, R3<br>2:00</small></button>
 <button class="z" data-z="4">Zone 4<small>K to H<br>1:00</small></button>

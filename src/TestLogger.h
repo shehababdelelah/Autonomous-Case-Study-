@@ -10,6 +10,13 @@
 // Runs:
 //   Zone run  "Zn-Rk"  one zone (1..4), files z<n>
 //   Full path "F-Rk"   WP0 -> WP7, files switch to the next zone after WP2, WP3 and WP5
+//   Bench     "S-Rk"   sensor bench (mode 5): records up to 10 min in place, never drives, WP0 only
+//
+// Team B4: Test type per run (requestStart): TYPE_AUTO drives as below, TYPE_MANUAL and
+//   TYPE_SENSORS only record - the operator drives by hand, or the box stands still. A bench run
+//   is always TYPE_SENSORS. The type is written to the events file as a TYPE row, and Log
+//   obstacle adds an OBSTACLE row.
+//   stateJson() is the same status as copyStatus(), as JSON for the phone page.
 //
 //   One zone is one test: press Start, and the zone records for its own time - 1:30 for zone 1,
 //   3:00 for zone 2, 2:00 for zone 3, 1:00 for zone 4 (zoneRunMs) - then saves and ends by
@@ -24,7 +31,7 @@
 //   the logger stays passive and you drive by hand, as before.
 //
 //   Zone  Section            Waypoints   Records   Ramp (ISO 8855 pitch, + = front down)
-//   1     B to C             WP0 - WP2   1:30      R1 DOWN, pitch up to +3.5 deg
+//   1     B to C             WP0 - WP2   10:00     R1 DOWN, pitch up to +3.5 deg
 //   2     F to E             WP2 - WP3   3:00      R2 UP,   pitch down to -3.5 deg
 //   3     D/E passage to K   WP3 - WP5   2:00      R3 UP,   pitch down to -3.5 deg
 //   4     K to H             WP5 - WP7   1:00      none
@@ -92,13 +99,14 @@ public:
   // Set kSideCm or kBackCm to kStopCm if you do want them equally strict - but check the width
   // of your narrowest passage first: a side limit of 120 cm needs a 2.4 m corridor to clear.
   //
-  // OBSTACLE DETECTION IS OFF. All three limits are 0, which blockedBy() reads as "do not check
-  // this sensor", so nothing stops a run early any more: not the ultrasonics, not the LiDAR. A
-  // test drive ends only on its own zone timer, on Stop on the test page, or on the red Stop on
-  // the driving page - and out of Wi-Fi range, only on the timer. The rover will drive into
-  // whatever is in front of it.
-  // To switch it back on, restore:  kStopCm = 120, kSideCm = 25, kBackCm = 0
-  static constexpr uint16_t kStopCm       = 0;
+  // FRONT OBSTACLE DETECTION IS ON at 50 cm, by the front LiDAR ONLY: it stops the run when
+  // something stays closer than kStopCm. Both front ultrasonics ("front upper" and the angled
+  // "front lower") are still logged but never stop the run: they echo off the floor grill at
+  // 38-43 cm. The price: glass, thin poles and things below the LiDAR beam are not seen.
+  // Side and back limits are still 0, which blockedBy() reads as "do not check this sensor".
+  // A limit of 0 means no check at all.
+  // To switch the front check off again, set kStopCm = 0.
+  static constexpr uint16_t kStopCm       = 50;
   static constexpr uint16_t kSideCm       = 0;
   static constexpr uint16_t kBackCm       = 0;
   // True while any limit is still armed; the status text uses it to say so plainly.
@@ -108,6 +116,49 @@ public:
   // (HC-SR04 modules do this, more so while driving) can no longer throw a whole run away. The
   // motors still go to zero on the very first close reading - only giving up the run waits.
   static constexpr uint32_t kBlockMs      = 400;
+  // Pause and resume: the motors stop at the first close reading, as before. After kBlockMs the
+  // run is "held" (logged), it carries on by itself with a soft start once the front has been
+  // clear for kClearMs, and it only gives up after being held for kHoldMaxMs.
+  static constexpr uint32_t kClearMs      = 200;
+  static constexpr uint32_t kResumeRampMs = 500;   // soft start after a pause (the first start is kRampUpMs)
+  static constexpr uint32_t kHoldMaxMs    = 20000;
+
+  // ---- Zone 1 route: B wall -> gap -> C wall -> 6.66 m -> brake -> turn right 90 -> straight ----
+  // Steps: WAIT_WALL (stand until the left wall is seen) -> WALL1 (drive straight along it) ->
+  // GAP (no wall on the left) -> WALL2 (wall again: drive kRouteAfterWallM more) -> BRAKE ->
+  // TURN (right 90 deg on the spot, slower near the end) -> STRAIGHT2 (until Stop).
+  // kRouteLastStep cuts the route short so it can be tested one step at a time:
+  //   1 = brake to a stop when the gap is found      2 = ... when the C wall is seen again
+  //   3 = ... after the 6.66 m, no turn              4 = the whole route
+  static constexpr uint8_t  kRouteLastStep   = 4;
+  // MEASURE: real speed of the rover at the test drive speed (TEST_SPEED in main.cpp), in m/s,
+  // from the 10 s tape-measure test. 0.30 is only a placeholder: the drive command 0.30 means
+  // 60 % power, not 0.3 m/s. Both the 6.66 m and the minimum gap length are worked out from it.
+  static constexpr float    kRouteSpeedMps   = 0.30f;
+  static constexpr float    kRouteAfterWallM = 6.66f;    // distance to drive once C is seen
+  static constexpr float    kRouteGapMinM    = 0.15f;    // gap length is NOT used: this is only a short
+                                                         // debounce (0.15 m = 0.5 s at 0.30 m/s)
+  static constexpr uint16_t kRouteWallMm     = 2000;     // a wall counts when it is nearer than this
+                                                         // (same 2 m for wall B and wall C)
+  static constexpr int      kRouteFanDeg     = 10;       // LiDAR looks at left +-this many degrees
+  static constexpr uint32_t kRouteStartSeenMs = 1000;    // wall must be seen this long to start
+  static constexpr uint32_t kRouteWallSeenMs  = 500;     // ... and this long to count as "again"
+  static constexpr uint32_t kBrakeMs         = 1000;     // smooth stop before the turn
+  static constexpr float    kTurnDeg         = 90.0f;    // right turn
+  // MEASURED on the rover: spinning on the spot only works at full power (0.5). Below that the
+  // wheels cannot overcome the friction and the rover barely turns. So the spin is always 0.5,
+  // and the angle is controlled by switching it on and off instead of by its size:
+  //   far from the target   -> spin continuously at kTurnSpin
+  //   within kTurnPulseDeg  -> short pulses (kTurnPulseOnMs on, kTurnPulseOffMs off, so the yaw
+  //                            can settle before it is read again), until within kTurnTolDeg
+  // The three numbers below are first guesses: tune them from how far one pulse turns the rover.
+  static constexpr float    kTurnSpin        = 0.5f;     // the only spin speed that works
+  static constexpr float    kTurnPulseDeg    = 35.0f;    // closer than this to the target: pulses
+  static constexpr uint32_t kTurnPulseOnMs   = 100;      // one pulse
+  static constexpr uint32_t kTurnPulseOffMs  = 300;      // pause after a pulse
+  static constexpr float    kTurnTolDeg      = 4.0f;     // done when this close to the target ...
+  static constexpr uint32_t kTurnHoldMs      = 300;      // ... for this long
+  static constexpr uint32_t kTurnTimeoutMs   = 20000;    // give up the run if the turn takes longer
   static constexpr uint8_t  kMaxSamples   = 100;
   static constexpr uint8_t  kMaxWaypoints = 16;
   // Ramp detection, on pitch measured against the pitch zero of this run.
@@ -175,6 +226,13 @@ public:
   static constexpr float    kYawMaxCorr   = 0.18f;   // largest difference put on one side
                                                      // 0.30 +- 0.18 = 0.12..0.48, inside +-0.5
   static constexpr float    kYawSmooth    = 0.35f;   // share of the new correction taken per step
+  // Integral term: remembers a steady pull to one side and cancels it, which removes the
+  // standing offset a proportional-only controller leaves. The measured pull (3.6 deg/s) needs
+  // about 0.04 of correction; 0.004 per deg*s gets there in roughly 5 s at a 2 deg error.
+  static constexpr float    kYawKi        = 0.004f;  // drive units per (deg * second)
+  static constexpr float    kYawIntMax    = 0.03f;   // largest correction the memory may hold
+  // Soft start: after the standing-still window the speed rises linearly over this time.
+  static constexpr uint32_t kRampUpMs     = 1500;
 
   // ---- runaway guard ----
   // In Z1-R1 the heading error reached 55.8 deg and the box translated 190 cm sideways into a
@@ -218,14 +276,23 @@ public:
   static constexpr uint32_t kFeatMs      = 1000;
   static constexpr uint8_t  kFeatMaxRuns = 8;
 
-  // mode/zone 0 = full path, 1..4 = zones
+  // mode/zone 0 = full path, 1..4 = zones, 5 = sensor bench (Team B4)
+  static constexpr uint8_t kBench = 5;
   static const char* zoneName(uint8_t z) {
-    static const char* const n[] = {"full path", "B to C", "F to E", "D/E passage to K", "K to H"};
-    return n[z < 5 ? z : 0];
+    static const char* const n[] = {"full path", "B to C", "F to E", "D/E passage to K", "K to H",
+                                    "sensor bench"};
+    return n[z < 6 ? z : 0];
   }
-  static uint8_t zoneFirstWp(uint8_t z) { static const uint8_t t[] = {0, 0, 2, 3, 5}; return t[z < 5 ? z : 0]; }
-  static uint8_t zoneLastWp(uint8_t z)  { static const uint8_t t[] = {7, 2, 3, 5, 7}; return t[z < 5 ? z : 0]; }
-  static uint8_t zoneRamps(uint8_t z)   { static const uint8_t t[] = {3, 1, 1, 1, 0}; return t[z < 5 ? z : 0]; }
+  static uint8_t zoneFirstWp(uint8_t z) { static const uint8_t t[] = {0, 0, 2, 3, 5, 0}; return t[z < 6 ? z : 0]; }
+  static uint8_t zoneLastWp(uint8_t z)  { static const uint8_t t[] = {7, 2, 3, 5, 7, 0}; return t[z < 6 ? z : 0]; }
+  static uint8_t zoneRamps(uint8_t z)   { static const uint8_t t[] = {3, 1, 1, 1, 0, 0}; return t[z < 6 ? z : 0]; }
+
+  // Team B4: what a run does with the motors. AUTO = autoDrive() at setTestDrive() speed.
+  enum { TYPE_SENSORS = 0, TYPE_MANUAL = 1, TYPE_AUTO = 2 };
+  static const char* typeName(uint8_t t) {
+    static const char* const n[] = {"sensors only", "manual drive", "auto"};
+    return n[t < 3 ? t : 0];
+  }
 
   // Which way the route ramp of a zone tilts the box first, in the ISO 8855 pitch sign
   // (+1 = down, so pitch runs up to +kRampMaxDeg; -1 = up, down to -kRampMaxDeg; 0 = no ramp):
@@ -234,8 +301,8 @@ public:
   // A ramp that tilts the other way is still recorded, but marked in the events file so you can
   // see that the box met the section from the other end.
   static int8_t zoneRampSign(uint8_t z) {
-    static const int8_t t[] = {0, +1, -1, -1, 0};
-    return t[z < 5 ? z : 0];
+    static const int8_t t[] = {0, +1, -1, -1, 0, 0};
+    return t[z < 6 ? z : 0];
   }
 
   /**
@@ -247,15 +314,18 @@ public:
    *       pretend to measure lateral position - without a wall, encoders or vision there is no
    *       lateral measurement to be had, and heading control alone cannot supply one.
    */
-  static bool zoneUsesWall(uint8_t z) { return z == 1; }
+  // Switched off: zone 1 now runs the route state machine (see kRouteLastStep), which steers by
+  // heading only and uses the left wall to decide WHEN to move on, not to steer.
+  static bool zoneUsesWall(uint8_t z) { (void)z; return false; }
 
-  // How long one press of Start records, per zone: zone 1 (B to C) 1:30, zone 2 (F to E) 3:00,
+  // How long one press of Start records, per zone: zone 1 (B to C) 10:00, zone 2 (F to E) 3:00,
   // zone 3 (D/E passage to K) 2:00, zone 4 (K to H) 1:00 - long enough to cross each section in
   // one go. The run then saves and ends by itself. Index 0 is their sum, for a full path run.
   // A waypoint that is still averaging finishes first, so a run can overrun by up to kAvgMs.
+  // Team B4: index 5, the sensor bench, records for at most 10 min.
   static uint32_t zoneRunMs(uint8_t z) {
-    static const uint32_t t[] = {450000, 90000, 180000, 120000, 60000};
-    return t[z < 5 ? z : 0];
+    static const uint32_t t[] = {450000, 600000, 180000, 120000, 60000, 600000};
+    return t[z < 6 ? z : 0];
   }
 
   void begin() {
@@ -269,7 +339,15 @@ public:
   }
 
   // ---- requests from the web page (safe from the web server task; run in update()) ----
-  void requestStart(uint8_t mode) { if (mode <= 4) { _reqMode = mode; _reqStart = true; } }
+  void requestStart(uint8_t mode) { requestStart(mode, TYPE_AUTO); }
+  // Team B4: type = TYPE_*. A bench run never drives.
+  void requestStart(uint8_t mode, uint8_t type) {
+    if (mode > kBench || _reqStart) return;
+    _reqType = mode == kBench ? (uint8_t)TYPE_SENSORS : (type <= TYPE_AUTO ? type : (uint8_t)TYPE_AUTO);
+    _reqMode = mode;
+    _reqStart = true;
+  }
+  void requestObstacle() { _reqObstacle = true; }   // Team B4: Log obstacle button
   void requestStop()     { _reqStop = true; }
   void requestMark()     { _reqMark = true; }
   void requestUndo()     { _reqUndo = true; }
@@ -297,18 +375,42 @@ public:
   // the reason and closes the files on the next pass.
   template <class S>
   bool autoDrive(S& s, float& left, float& right) const {
-    if (!_rec || _driveSpeed <= 0.0f) return false;
+    if (!_rec || _runDrive <= 0.0f) return false;
     left = right = 0.0f;
     if (_avgActive) return true;                               // standing still for a waypoint
     if (millis() - _zoneT0 < kZeroMs) return true;             // settling for the pitch zero
+    if (routeActive()) {
+      if (_routeState == R_WAIT_WALL || _routeState == R_DONE) return true;  // standing still
+      if (_routeState == R_TURN) {                             // spinning on the spot, right
+        left = _spinCmd;                                       // (no front check: the front sweeps)
+        right = -_spinCmd;
+        return true;
+      }
+    }
+    if (_held) return true;                                    // paused for an obstacle, update() resumes
     uint16_t cm;
     if (blockedBy(s, cm)) return true;                         // blocked: update() ends the run
     // Straight ahead, steered by the heading error: drifted left -> left wheel gets the faster
     // share. Clamped to the base speed so a correction can never reverse or stall a wheel.
-    const float corr = constrain(_yawCorr, -_driveSpeed, _driveSpeed);
-    left = _driveSpeed + corr;
-    right = _driveSpeed - corr;
+    float v = _runDrive * rampFactor();                        // soft start: 0 -> full speed
+    if (routeActive() && _routeState == R_BRAKE) {             // smooth stop: full -> 0 over kBrakeMs
+      const uint32_t b = millis() - _routeT0;
+      v *= b >= kBrakeMs ? 0.0f : 1.0f - (float)b / (float)kBrakeMs;
+    }
+    const float corr = constrain(_yawCorr, -v, v);
+    left = v + corr;
+    right = v - corr;
     return true;
+  }
+
+  // 0..1: how far the soft start has come. 0 while standing still for the pitch zero. After an
+  // obstacle the ramp starts again from _rampT0 (the moment the front was free).
+  float rampFactor() const {
+    const uint32_t now = millis();
+    const uint32_t t0 = _rampT0 ? _rampT0 : _zoneT0 + kZeroMs;
+    if (now <= t0) return 0.0f;
+    const uint32_t r = now - t0;
+    return r >= _rampLenMs ? 1.0f : (float)r / (float)_rampLenMs;
   }
 
   // true if the path belongs to the run that is being recorded (no download then)
@@ -362,11 +464,12 @@ public:
 
     bool acted = false;
     if (_reqStop)   { _reqStop = false;   stopRun(now, "stopped by hand"); acted = true; }
-    if (_reqStart)  { _reqStart = false;  startRun(_reqMode, now); acted = true; }
+    if (_reqStart)  { startRun(_reqMode, now); _reqStart = false; acted = true; }
     if (_reqNext)   { _reqNext = false;   nextZone(now, true, "next zone pressed"); acted = true; }
     if (_reqMark)   { _reqMark = false;   markWaypoint(now);       acted = true; }
     if (_reqUndo)   { _reqUndo = false;   undoLast(now);           acted = true; }
     if (_reqDelete) { _reqDelete = false; deleteRuns(_delName);    acted = true; }
+    if (_reqObstacle) { _reqObstacle = false; logObstacle(now, s); acted = true; }
     if (acted) _lastStatus = now - kStatusMs;
 
     const bool  imu   = s.imuOk();
@@ -398,11 +501,18 @@ public:
         Serial.printf("# %s\n", z);
       }
     }
-    wallStep(s, now);          // zone 1 only; chooses and tracks the side wall
-    headingStep(yaw, imu);
+    wallStep(s, now);          // off since the route mode (zoneUsesWall is false)
+    routeStep(s, now, yaw, imu);
+    if (routeActive() && _routeState == R_TURN) {
+      // Spinning on the spot: the heading hold has nothing to hold, and its runaway guard must
+      // not mistake the turn for a drift.
+      _yawCorr = 0; _yawErr = 0; _yawInt = 0; _intMs = 0; _errBadSince = 0;
+    } else {
+      headingStep(yaw, imu);
+    }
     // Runaway guard: a heading error this large for this long means the box is no longer on the
     // segment, and steering harder would be guessing. This is what Z1-R1 needed and did not have.
-    if (_rec && _yaw0Set && _driveSpeed > 0.0f) {
+    if (_rec && _yaw0Set && _runDrive > 0.0f) {
       if (fabsf(_yawErr) >= kErrStopDeg) {
         if (!_errBadSince) _errBadSince = now ? now : 1;
         else if (now - _errBadSince >= kErrStopMs) {
@@ -490,15 +600,43 @@ public:
         ev = "AUTO_STOP";
         snprintf(why, sizeof why, "zone %u time done, %lu:%02lu", (unsigned)_zone,
                  (unsigned long)(runMs / 60000), (unsigned long)((runMs / 1000) % 60));
-      } else if (_driveSpeed > 0.0f && _blockWhere) {
-        if (!_blockSince) {
-          _blockSince = now ? now : 1;      // 0 means "not blocked", so never store a plain 0
-        } else if (now - _blockSince >= kBlockMs) {
-          ev = "DRIVE_ABORT";
-          snprintf(why, sizeof why, "%s %u cm", _blockWhere, (unsigned)_blockCm);
+      } else if (_runDrive > 0.0f) {
+        // While anything is close, or the run is held, the soft start stays at zero; it starts
+        // counting from the moment the front is free again.
+        // (not while turning on the spot: that check is off, see autoDrive)
+        const bool turning = routeActive() && _routeState == R_TURN;
+        const char* bw = turning ? nullptr : _blockWhere;
+        if (bw || _held) { _rampT0 = now ? now : 1; _rampLenMs = kResumeRampMs; }
+        if (bw) {
+          _clearSince = 0;
+          if (!_blockSince) {
+            _blockSince = now ? now : 1;    // 0 means "not blocked", so never store a plain 0
+          } else if (!_held && now - _blockSince >= kBlockMs) {
+            _held = true;                   // a real obstacle, not one stray reading
+            snprintf(why, sizeof why, "%s %u cm", _blockWhere, (unsigned)_blockCm);
+            snprintf(_holdWhy, sizeof _holdWhy, "%s", why);   // for the status text
+            evText(now, "HOLD", why);
+            Serial.printf("# HOLD: %s\n", why);
+          }
+          if (_blockSince && now - _blockSince >= kHoldMaxMs) {
+            ev = "DRIVE_ABORT";
+            snprintf(why, sizeof why, "%s %u cm for %lu s", _blockWhere, (unsigned)_blockCm,
+                     (unsigned long)(kHoldMaxMs / 1000));
+          }
+        } else {
+          _blockSince = 0;                  // clear again: a single stray reading is forgotten
+          if (_held) {
+            if (!_clearSince) {
+              _clearSince = now ? now : 1;
+            } else if (now - _clearSince >= kClearMs) {
+              _held = false;
+              _clearSince = 0;
+              _yawInt = 0; _intMs = 0;     // forget the push learned before the pause
+              evText(now, "RESUME", "front clear, soft start");
+              Serial.println("# RESUME: front clear, soft start");
+            }
+          }
         }
-      } else {
-        _blockSince = 0;                    // clear again: a single stray reading is forgotten
       }
       if (ev) {
         evText(now, ev, why);
@@ -519,8 +657,9 @@ private:
     if (!_fsOk) { note("No flash file system: cannot record."); return; }
     if (_rec)   { note("Stop the current run first."); return; }
     const unsigned k = nextRunNumber(mode);
-    if (mode == 0) snprintf(_run, sizeof _run, "F-R%u", k);
-    else           snprintf(_run, sizeof _run, "Z%u-R%u", (unsigned)mode, k);
+    if (mode == 0)           snprintf(_run, sizeof _run, "F-R%u", k);
+    else if (mode == kBench) snprintf(_run, sizeof _run, "S-R%u", k);
+    else                     snprintf(_run, sizeof _run, "Z%u-R%u", (unsigned)mode, k);
     char dir[16];
     snprintf(dir, sizeof dir, "/%s", _run);
     LittleFS.mkdir(dir);
@@ -528,13 +667,25 @@ private:
     _t0 = now;
     _wpCount = zoneFirstWp(mode);
     _avgActive = false; _pitch0Set = false; _zeroSum = 0; _zeroN = 0; _blockSince = 0;
-    _yaw0Set = false; _yaw0 = 0; _yawErr = 0; _yawCorr = 0;
+    _held = false; _clearSince = 0; _rampT0 = 0; _rampLenMs = kRampUpMs; _holdWhy[0] = '\0';
+    _routeState = R_WAIT_WALL; _brakeNext = R_DONE; _routeT0 = 0; _wall2T0 = 0;
+    _wallSeenSince = _wallGoneSince = 0; _turnOkSince = 0; _spinCmd = 0; _turnErr = 0;
+    _leftMm = 0; _leftWall = false;
+    _yaw0Set = false; _yaw0 = 0; _yawErr = 0; _yawCorr = 0; _yawInt = 0; _intMs = 0;
     _wallCorr = 0; _wallSide = 0; _wallRefMm = 0; _wallNowMm = 0; _wallLostSince = 0;
     _errBadSince = 0;
     resetRampState();
     _usedAtStart = LittleFS.usedBytes(); _written = 0; _full = false;
+    // Team B4: only an AUTO run drives; the type goes into the first events file.
+    _type = _reqType;
+    _runDrive = _type == TYPE_AUTO ? _driveSpeed : 0.0f;
+    _wpResN = 0; _obstacles = 0;
     _rec = true;
     openZoneFiles(now);
+    char t[48];
+    if (_runDrive > 0.0f) snprintf(t, sizeof t, "%s, forward %.2f", typeName(_type), _runDrive);
+    else                  snprintf(t, sizeof t, "%s, the logger does not drive", typeName(_type));
+    evText(now, "TYPE", t);
     Serial.printf("# start %s, zone %u (%s)\n", _run, (unsigned)_zone, zoneName(_zone));
     note("Recording %s. Press Mark at WP%u.", _run, (unsigned)_wpCount);
   }
@@ -547,7 +698,7 @@ private:
     _rec = false;
     _usedIdle = LittleFS.usedBytes();
     Serial.printf("# stop %s (%s)\n", _run, why);
-    note("Run %s saved - %s. Download it below.", _run, why);
+    note("Run %s saved - %s. Results and files are on the Results tab.", _run, why);
   }
 
   // Full path only: close this zone's files and open the next zone's files.
@@ -625,8 +776,9 @@ private:
 
   unsigned nextRunNumber(uint8_t mode) const {
     char prefix[8];
-    if (mode == 0) snprintf(prefix, sizeof prefix, "F-R");
-    else           snprintf(prefix, sizeof prefix, "Z%u-R", (unsigned)mode);
+    if (mode == 0)           snprintf(prefix, sizeof prefix, "F-R");
+    else if (mode == kBench) snprintf(prefix, sizeof prefix, "S-R");
+    else                     snprintf(prefix, sizeof prefix, "Z%u-R", (unsigned)mode);
     const size_t pl = strlen(prefix);
     unsigned best = 0;
     File root = LittleFS.open("/");
@@ -789,7 +941,7 @@ private:
       if (_avgActive)
         catf(s, n, len, "The waypoint finishes before the run ends\n");
       else
-        catf(s, n, len, "%s in %lu:%02lu\n", _driveSpeed > 0.0f ? "DRIVING FORWARD, stops"
+        catf(s, n, len, "%s in %lu:%02lu\n", _runDrive > 0.0f ? "DRIVING FORWARD, stops"
              : "Saves itself", (unsigned long)(leftSec / 60), (unsigned long)(leftSec % 60));
       if (_avgActive)
         catf(s, n, len, "Averaging WP%u: %lu s left, keep still\n", (unsigned)_wpCount,
@@ -801,7 +953,18 @@ private:
       catf(s, n, len, "Ramps: %u of %u   Front: %u cm%s   GPS fix: %u%%   IMU: %s\n",
            (unsigned)_rampsZone, (unsigned)zoneRamps(_zone), (unsigned)_frontCm,
            kObstacleCheck ? "" : " (no stop)", fixPct, _lastImu ? "ok" : "NOT READY");
-      if (_driveSpeed > 0.0f) {
+      if (_runDrive > 0.0f && _held)
+        catf(s, n, len, "PAUSED by %s, waiting for it to clear\n", _holdWhy);
+      else if (_runDrive > 0.0f && _blockWhere)
+        catf(s, n, len, "Something close: %s %u cm\n", _blockWhere, (unsigned)_blockCm);
+      if (routeActive()) {
+        catf(s, n, len, "Route: %s\n", routeName(_routeState));
+        catf(s, n, len, "Left wall (<%u mm): %s, nearest %u mm\n", (unsigned)kRouteWallMm,
+             _leftWall ? "YES" : "no", (unsigned)_leftMm);
+        if (_routeState == R_TURN)
+          catf(s, n, len, "Turn: %+.0f deg still to go\n", _turnErr);
+      }
+      if (_runDrive > 0.0f) {
         if (_yaw0Set)
           catf(s, n, len, "Heading %+.1f of %.1f deg, steering %+.2f\n", _yawErr, _yaw0, _yawCorr);
         else
@@ -813,14 +976,14 @@ private:
                 (unsigned long)(rate ? freeBytes() / rate : 0));
     } else if (_driveSpeed > 0.0f) {
       catf(s, n, len, "IDLE - Start drives the rover FORWARD and records\n"
-                      "Zone 1: 1:30   zone 2: 3:00   zone 3: 2:00   zone 4: 1:00\n");
+                      "Zone 1: 10:00   zone 2: 3:00   zone 3: 2:00   zone 4: 1:00\n");
       // The commonest reason a test seems to do nothing: a sensor is already too close, so the
       // run aborts in the same moment it starts. Name the sensor before Start is pressed.
       if (!kObstacleCheck)
         catf(s, n, len, "OBSTACLE DETECTION OFF - nothing will stop the run. Front %u cm\n",
              (unsigned)_frontCm);
       else if (_blockWhere)
-        catf(s, n, len, "BLOCKED by %s at %u cm - clear it or Start will abort\n",
+        catf(s, n, len, "BLOCKED by %s at %u cm - Start will wait until it is clear\n",
              _blockWhere, (unsigned)_blockCm);
       else
         catf(s, n, len, "Front %u cm, clear to start (front %u, sides %u cm)\n",
@@ -835,9 +998,67 @@ private:
     }
     catf(s, n, len, "%s", _note);
     _statusIdx = (uint8_t)(1 - _statusIdx);
+    buildState(now);
   }
 
+  // Team B4: the same status as JSON for the phone page, built here in loop() and double
+  // buffered like the text, so the web task never reads half-written values.
+  void buildState(uint32_t now) {
+    char* s = _state[1 - _stateIdx];
+    const size_t n = sizeof _state[0];
+    size_t len = 0;
+    s[0] = '\0';
+    const uint32_t freeKb = freeBytes() / 1024;
+    const uint32_t zoneMs = _rec ? now - _zoneT0 : 0;
+    const long avgLeft = _avgActive ? (long)((kAvgMs - (now - _avgStart) + 999) / 1000) : -1;
+    catf(s, n, len, "{\"fs\":%d,\"rec\":%d,\"run\":\"%s\",\"mode\":%u,\"zone\":%u,\"type\":%u,"
+         "\"drive\":%.2f,\"cfgDrive\":%.2f,\"zoneMs\":%lu,\"totalMs\":%lu,\"runMs\":%lu,",
+         _fsOk ? 1 : 0, _rec ? 1 : 0, _run, (unsigned)_mode, (unsigned)_zone, (unsigned)_type,
+         _runDrive, _driveSpeed, (unsigned long)zoneMs, (unsigned long)zoneRunMs(_zone),
+         (unsigned long)(_rec ? now - _t0 : 0));
+    catf(s, n, len, "\"wp\":%u,\"wpFirst\":%u,\"wpLast\":%u,\"avgLeft\":%ld,\"ramps\":%u,"
+         "\"rampsExp\":%u,\"obstacles\":%u,\"front\":%u,\"block\":\"%s\",\"obstacleCheck\":%d,",
+         (unsigned)_wpCount, (unsigned)zoneFirstWp(_rec ? _mode : 1), (unsigned)zoneLastWp(_rec ? _mode : 1),
+         avgLeft, (unsigned)_rampsZone, (unsigned)zoneRamps(_zone), (unsigned)_obstacles,
+         (unsigned)_frontCm, _blockWhere ? _blockWhere : "", kObstacleCheck ? 1 : 0);
+    catf(s, n, len, "\"yawRef\":%d,\"yawErr\":%.1f,\"imu\":%d,\"fix\":%d,\"freeKb\":%lu,"
+         "\"freeMin\":%lu,\"full\":%d,\"wps\":[",
+         _yaw0Set ? 1 : 0, _yawErr, _lastImu ? 1 : 0, _lastFix ? 1 : 0, (unsigned long)freeKb,
+         (unsigned long)(freeBytes() / kBytesPerMin), _full ? 1 : 0);
+    for (uint8_t i = 0; i < _wpResN; ++i)
+      catf(s, n, len, "%s{\"wp\":%u,\"res\":%u,\"spread\":%.1f}", i ? "," : "",
+           (unsigned)_wpRes[i].wp, (unsigned)_wpRes[i].res, _wpRes[i].spread);
+    catf(s, n, len, "],\"note\":\"");
+    for (const char* p = _note; *p && len + 8 < n; ++p) {   // JSON string: escape " and backslash
+      if (*p == '"' || *p == '\\') s[len++] = '\\';
+      if ((unsigned char)*p >= 0x20) s[len++] = *p;
+    }
+    s[len] = '\0';
+    catf(s, n, len, "\"}");
+    _stateIdx = (uint8_t)(1 - _stateIdx);
+  }
+
+public:
+  void stateJson(char* out, size_t n) const {
+    strncpy(out, _state[_stateIdx], n - 1);
+    out[n - 1] = '\0';
+  }
+
+private:
+
   size_t bufTotal() const { size_t t = 0; for (uint8_t i = 0; i < F_COUNT; ++i) t += _bufLen[i]; return t; }
+
+  // Team B4: Log obstacle on the phone page - one OBSTACLE row with what the sensors saw ahead.
+  template <class S>
+  void logObstacle(uint32_t now, S& s) {
+    if (!_rec) { note("Press Start first."); return; }
+    ++_obstacles;
+    char m[72];
+    snprintf(m, sizeof m, "logged by hand #%u; front %u cm, US front %u cm",
+             (unsigned)_obstacles, (unsigned)_frontCm, (unsigned)s.usCm(0));
+    evText(now, "OBSTACLE", m);
+    note("Obstacle %u logged, front %u cm.", (unsigned)_obstacles, (unsigned)_frontCm);
+  }
 
   // ---------- waypoints ----------
   void markWaypoint(uint32_t now) {
@@ -859,6 +1080,7 @@ private:
     if (_avgActive) { _avgActive = false; evText(now, "WP_CANCELLED", "undo"); note("Averaging cancelled."); return; }
     if (_wpCount <= _wpZoneStart) { note("No waypoint of this zone to remove."); return; }
     --_wpCount;
+    if (_wpResN && _wpRes[_wpResN - 1].wp == _wpCount) --_wpResN;
     char s[48];
     snprintf(s, sizeof s, "WP%u removed", (unsigned)_wpCount);
     evText(now, "UNDO", s);
@@ -903,6 +1125,9 @@ private:
     Serial.printf("# WP%u %s spread %.1f m\n", (unsigned)_wpCount, verdict, spread);
     if (!_pitch0Set && !_moved && _yawN) { _pitch0 = _sumPitch / _yawN; _pitch0Set = true; }
     const uint8_t done = _wpCount++;
+    // Team B4: kept for the phone page's checkpoint list (stateJson); undo removes it again.
+    if (_wpResN < kMaxWaypoints)
+      _wpRes[_wpResN++] = {done, (uint8_t)(!_n ? 2 : (_moved ? 1 : 0)), spread};
     if (!ok) { note("WP%u: %s.", (unsigned)done, verdict); return; }
     if (done >= zoneLastWp(_zone) && (_mode != 0 || _zone == 4))
       note("WP%u saved, spread %.1f m. %s done: press Stop and save.", (unsigned)done, spread,
@@ -994,9 +1219,11 @@ private:
   // Called every pass; autoDrive() applies the result, so the correction is always one loop pass
   // old - a few milliseconds against a yaw that only moves at 4 Hz.
   void headingStep(float yaw, bool imu) {
-    if (!_rec || _driveSpeed <= 0.0f || !_yaw0Set || !imu || isnan(yaw)) {
+    if (!_rec || _runDrive <= 0.0f || !_yaw0Set || !imu || isnan(yaw)) {
       _yawCorr = 0;         // no heading to hold: drive both wheels the same
       _yawErr = 0;
+      _yawInt = 0;
+      _intMs = 0;
       return;
     }
     _yawErr = wrapDeg(yaw - _yaw0);
@@ -1017,7 +1244,21 @@ private:
       const float term = kWallGain * off * (_wallSide < 0 ? +1.0f : -1.0f);
       _wallCorr = constrain(term, -kWallMaxCorr, kWallMaxCorr);
     }
-    want = constrain(want + _wallCorr, -kYawMaxCorr, kYawMaxCorr);
+    // Integral: only at full speed (not while standing or ramping up), and it stops growing when
+    // the total is already at its limit, so it cannot wind up.
+    const uint32_t nowMs = millis();
+    if (rampFactor() >= 1.0f) {
+      if (_intMs) {
+        const float dt = (nowMs - _intMs) / 1000.0f;
+        const float sum = want + _wallCorr + _yawInt;
+        const bool saturated = fabsf(sum) >= kYawMaxCorr && (sum * _yawErr) > 0;
+        if (!saturated) _yawInt = constrain(_yawInt + kYawKi * _yawErr * dt, -kYawIntMax, kYawIntMax);
+      }
+      _intMs = nowMs ? nowMs : 1;
+    } else {
+      _intMs = 0;
+    }
+    want = constrain(want + _wallCorr + _yawInt, -kYawMaxCorr, kYawMaxCorr);
     _yawCorr += kYawSmooth * (want - _yawCorr);
   }
 
@@ -1127,16 +1368,157 @@ private:
     }
   }
 
-  // Closest thing straight ahead in cm: the front LiDAR sectors and both front ultrasonics.
-  // Each reports "nothing there" in its own way - the LiDAR gives 0, an ultrasonic its maximum -
-  // so with no sensor working this stays large and the abort never fires: it cannot see.
+  // ---------- zone 1 route ----------
+  // True while the Zone 1 route is the thing driving (Zone 1 button, automatic drive).
+  bool routeActive() const { return _rec && _runDrive > 0.0f && _mode == 1; }
+
+  static const char* routeName(uint8_t st) {
+    static const char* const n[] = {"waiting for the left wall", "driving along wall B",
+                                    "in the gap (no wall)", "wall C seen, driving on",
+                                    "braking", "turning right 90 deg", "driving straight, press Stop",
+                                    "route finished, press Stop"};
+    return st < 8 ? n[st] : "?";
+  }
+
+  void setRoute(uint32_t now, uint8_t st, const char* why) {
+    _routeState = st;
+    _routeT0 = now ? now : 1;
+    evText(now, "ROUTE", why);
+    Serial.printf("# ROUTE: %s\n", why);
+    _lastStatus = now - kStatusMs;
+  }
+
+  void beginBrake(uint32_t now, uint8_t next, const char* why) {
+    _brakeNext = next;
+    setRoute(now, R_BRAKE, why);
+  }
+
+  void routeAbort(uint32_t now, const char* why) {
+    evText(now, "ROUTE_ABORT", why);
+    Serial.printf("# ROUTE_ABORT: %s\n", why);
+    stopRun(now, why);
+    _lastStatus = now - kStatusMs;
+  }
+
+  // Is there a wall on the left, nearer than kRouteWallMm? Looks at a narrow fan around 90 deg
+  // left of straight ahead; the wall counts when at least half of the fan's bins are that near.
+  // nearestMm is the nearest of them (0 = none), for the status text.
+  template <class S>
+  static bool leftWallNear(S& s, uint16_t& nearestMm) {
+    uint8_t total = 0, nearN = 0;
+    uint16_t best = 0;
+    for (int d = -kRouteFanDeg; d <= kRouteFanDeg; d += 2) {
+      ++total;
+      const uint16_t mm = s.lidarBinMm(S::lidarBin(-90 + d));
+      if (mm < S::kLidarMinMm || mm >= S::kLidarMaxMm) continue;   // no return
+      if (mm <= kRouteWallMm) { ++nearN; if (!best || mm < best) best = mm; }
+    }
+    nearestMm = best;
+    return nearN * 2 >= total;
+  }
+
+  // The route state machine. Runs every pass. It only decides the state; autoDrive() turns the
+  // state into wheel commands. Yaw: + = turning left, so a RIGHT turn makes yaw go DOWN.
+  template <class S>
+  void routeStep(S& s, uint32_t now, float yaw, bool imu) {
+    if (!routeActive() || !_yaw0Set || !imu || isnan(yaw)) return;
+    if (!s.lidarOk()) return;                       // no LiDAR data: keep the state, decide nothing
+    uint16_t nearest = 0;
+    const bool wall = leftWallNear(s, nearest);
+    _leftMm = nearest;
+    _leftWall = wall;
+    if (wall) { if (!_wallSeenSince) _wallSeenSince = now ? now : 1; _wallGoneSince = 0; }
+    else      { if (!_wallGoneSince) _wallGoneSince = now ? now : 1; _wallSeenSince = 0; }
+    const uint32_t seenMs = _wallSeenSince ? now - _wallSeenSince : 0;
+    const uint32_t goneMs = _wallGoneSince ? now - _wallGoneSince : 0;
+
+    switch (_routeState) {
+      case R_WAIT_WALL:
+        if (seenMs >= kRouteStartSeenMs) {
+          _yaw0 = yaw;                              // the heading to hold is the one it starts with
+          _yawInt = 0; _intMs = 0; _yawCorr = 0;
+          _rampT0 = now ? now : 1;                  // soft start from now
+          _rampLenMs = kRampUpMs;
+          setRoute(now, R_WALL1, "left wall seen, soft start");
+        }
+        break;
+      case R_WALL1:
+        if (goneMs >= (uint32_t)(kRouteGapMinM / kRouteSpeedMps * 1000.0f)) {
+          if (kRouteLastStep <= 1) beginBrake(now, R_DONE, "gap found, stopping (last step 1)");
+          else setRoute(now, R_GAP, "gap found (no wall on the left)");
+        }
+        break;
+      case R_GAP:
+        if (seenMs >= kRouteWallSeenMs) {
+          _wall2T0 = _wallSeenSince;                // the 6.66 m starts when the wall first showed
+          if (kRouteLastStep <= 2) beginBrake(now, R_DONE, "wall C seen, stopping (last step 2)");
+          else setRoute(now, R_WALL2, "wall C seen, driving 6.66 m on");
+        }
+        break;
+      case R_WALL2:
+        if (now - _wall2T0 >= (uint32_t)(kRouteAfterWallM / kRouteSpeedMps * 1000.0f)) {
+          if (kRouteLastStep >= 4) beginBrake(now, R_TURN, "6.66 m done, braking for the turn");
+          else beginBrake(now, R_DONE, "6.66 m done, stopping (last step 3)");
+        }
+        break;
+      case R_BRAKE:
+        if (now - _routeT0 >= kBrakeMs) {
+          if (_brakeNext == R_TURN) {
+            _turnTarget = wrapDeg(yaw - kTurnDeg);  // right = yaw down
+            _turnOkSince = 0;
+            _spinCmd = 0;
+            _pulseT0 = 0;
+            setRoute(now, R_TURN, "turning right 90 deg");
+          } else {
+            setRoute(now, R_DONE, "route finished, press Stop");
+          }
+        }
+        break;
+      case R_TURN: {
+        const float err = wrapDeg(yaw - _turnTarget);   // + = still has to turn right
+        const uint32_t tt = now - _routeT0;
+        _turnErr = err;
+        if (tt > kTurnTimeoutMs) { routeAbort(now, "turn took too long"); break; }
+        if (tt > 1000 && fabsf(err) > kTurnDeg + 25.0f) {
+          routeAbort(now, "turn went the wrong way");   // yaw sign check, see routeStep comment
+          break;
+        }
+        if (fabsf(err) <= kTurnTolDeg) {
+          _spinCmd = 0;
+          if (!_turnOkSince) _turnOkSince = now ? now : 1;
+          else if (now - _turnOkSince >= kTurnHoldMs) {
+            _yaw0 = yaw;                            // hold the new heading
+            _yawErr = 0; _yawCorr = 0; _yawInt = 0; _intMs = 0;
+            _rampT0 = now ? now : 1;                // soft start again
+            _rampLenMs = kRampUpMs;
+            setRoute(now, R_STRAIGHT2, "turn done, soft start, straight on");
+          }
+        } else {
+          _turnOkSince = 0;
+          const float dir = err > 0 ? kTurnSpin : -kTurnSpin;   // + = right; negative if overshot
+          if (fabsf(err) > kTurnPulseDeg) {
+            _pulseT0 = 0;
+            _spinCmd = dir;                          // far away: spin continuously
+          } else {
+            if (!_pulseT0) _pulseT0 = now ? now : 1;
+            const uint32_t ph = (now - _pulseT0) % (kTurnPulseOnMs + kTurnPulseOffMs);
+            _spinCmd = ph < kTurnPulseOnMs ? dir : 0.0f;   // pulse, then wait for the yaw to settle
+          }
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  // Closest thing straight ahead in cm: the front LiDAR sectors only (the ultrasonics are left
+  // out, like in blockedBy()). The LiDAR gives 0 for "nothing there", so with no LiDAR data this
+  // stays large and the abort never fires: it cannot see.
   template <class S>
   static uint16_t frontCm(S& s) {
-    uint16_t d = 300;
-    const uint16_t cand[3] = {minSectors(s, -3, 3), (uint16_t)s.usCm(0), (uint16_t)s.usCm(4)};
-    for (uint8_t i = 0; i < 3; ++i)
-      if (cand[i] > 0 && cand[i] < d) d = cand[i];
-    return d;
+    const uint16_t l = minSectors(s, -3, 3);
+    return (l > 0 && l < 300) ? l : 300;
   }
 
   // Which sensor, if any, sees something too close to carry on driving forward. Returns its name
@@ -1149,7 +1531,9 @@ private:
                                          "left", "right", "back"};
     const uint16_t d[6] = {minSectors(s, -3, 3), (uint16_t)s.usCm(0), (uint16_t)s.usCm(4),
                            (uint16_t)s.usCm(1), (uint16_t)s.usCm(2), (uint16_t)s.usCm(3)};
-    const uint16_t lim[6] = {kStopCm, kStopCm, kStopCm, kSideCm, kSideCm, kBackCm};
+    // Both front ultrasonics (front upper, front lower) see the floor grill, so they never stop
+    // a run (0). Only the LiDAR stops it.
+    const uint16_t lim[6] = {kStopCm, 0, 0, kSideCm, kSideCm, kBackCm};
     const char* who = nullptr;
     cm = 0;
     for (uint8_t i = 0; i < 6; ++i)
@@ -1187,17 +1571,43 @@ private:
   uint32_t _gpsN = 0, _gpsFixN = 0;
   // web requests
   volatile bool    _reqStart = false, _reqStop = false, _reqMark = false, _reqUndo = false,
-                   _reqNext = false, _reqDelete = false;
-  volatile uint8_t _reqMode = 1;
+                   _reqNext = false, _reqDelete = false, _reqObstacle = false;
+  volatile uint8_t _reqMode = 1, _reqType = TYPE_AUTO;
   char     _delName[16] = {0};
   // status (double buffer)
   char     _status[2][448] = {{0}, {0}};
   volatile uint8_t _statusIdx = 0;
+  // Team B4: run type, its drive speed, checkpoint results and obstacles, and the JSON status
+  uint8_t  _type = TYPE_AUTO;
+  float    _runDrive = 0;     // forward speed of THIS run: _driveSpeed for AUTO, else 0
+  struct WpRes { uint8_t wp, res; float spread; };   // res: 0 ok, 1 moved, 2 no GPS fix
+  WpRes    _wpRes[kMaxWaypoints];
+  uint8_t  _wpResN = 0, _obstacles = 0;
+  char     _state[2][1536] = {{0}, {0}};
+  volatile uint8_t _stateIdx = 0;
   uint32_t _lastStatus = 0;
   char     _note[96] = {0};
   bool     _lastFix = false, _lastImu = false;
   uint16_t _frontCm = 300;    // closest thing in front, last pass
+  // zone 1 route state
+  enum RouteState : uint8_t { R_WAIT_WALL = 0, R_WALL1, R_GAP, R_WALL2, R_BRAKE, R_TURN,
+                              R_STRAIGHT2, R_DONE };
+  uint8_t  _routeState = R_WAIT_WALL;
+  uint8_t  _brakeNext = R_DONE;       // where the brake leads: the turn, or the end
+  uint32_t _routeT0 = 0;              // when the current step began
+  uint32_t _wall2T0 = 0;              // when wall C first showed, for the 6.66 m
+  uint32_t _wallSeenSince = 0, _wallGoneSince = 0;   // left wall present / absent since, 0 = no
+  uint32_t _turnOkSince = 0;          // first pass the turn was inside the tolerance
+  uint32_t _pulseT0 = 0;              // start of the pulse cycle near the end of the turn, 0 = not yet
+  float    _turnTarget = 0, _turnErr = 0, _spinCmd = 0;   // spin: + = turn right
+  uint16_t _leftMm = 0;               // nearest left wall return in the fan, 0 = none (status only)
+  bool     _leftWall = false;
   uint32_t _blockSince = 0;   // first pass something was too close, 0 = clear
+  bool     _held = false;     // paused for an obstacle; resumes when the front is clear
+  uint32_t _clearSince = 0;   // first pass the front was clear while held, 0 = not clear
+  uint32_t _rampT0 = 0;       // soft start begins here, 0 = after the start-of-run wait
+  uint32_t _rampLenMs = kRampUpMs;   // how long that soft start takes: first start / after a pause
+  char     _holdWhy[48] = {0};       // which sensor paused the run, and how close (status text)
   const char* _blockWhere = nullptr;  // which sensor is too close, nullptr = clear
   uint16_t _blockCm = 0;              // and at what distance
   // waypoints
@@ -1216,6 +1626,8 @@ private:
   float    _yaw0 = 0;         // the heading the drive holds, deg
   float    _yawErr = 0;       // current error against it, deg (status text)
   float    _yawCorr = 0;      // wheel-speed difference it asks for, smoothed
+  float    _yawInt = 0;       // integral memory of a steady pull, reset every run
+  uint32_t _intMs = 0;        // time of the last integral step, 0 = not integrating
   float    _wallCorr = 0;     // the lateral part of it (zone 1 only)
   int8_t   _wallSide = 0;     // -1 left, +1 right, 0 = heading only
   uint16_t _wallRefMm = 0;    // distance held, captured at the segment start

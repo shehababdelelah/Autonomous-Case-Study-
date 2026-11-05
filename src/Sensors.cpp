@@ -25,7 +25,12 @@ void Sensors::begin(int lidarOffsetDeg) {
 void Sensors::update() {
   _lidar.update();  // drain both UARTs every pass
   _gps.poll();
-  if (_imuReady) _imu.update(); else _startImuIfPresent();
+  if (_imuReady) {
+    _imu.update();
+    _yaw = _imu.yawDeg();  // every pass, not only per snapshot: the heading hold reads this
+  } else {
+    _startImuIfPresent();
+  }
 
   const uint32_t now = millis();
   if (now - _lastSnapMs < kSnapshotMs) return;
