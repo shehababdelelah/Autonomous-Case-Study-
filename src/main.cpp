@@ -4,6 +4,7 @@
 #include "LidarScan.h"
 #include "Route.hpp"
 #include "RoverLink.hpp"
+#include "RunLog.hpp"
 #include "Settings.hpp"
 #include "WEBpage.hpp"
 #include <Wire.h>
@@ -12,6 +13,7 @@
 static constexpr uint32_t kRoutePeriodMs = 50;
 static constexpr uint32_t kPagePeriodMs = 200;
 static constexpr uint32_t kOledPeriodMs = 1000;
+static constexpr uint32_t kLogPeriodMs = 100;
 static constexpr uint32_t kMaxImuAgeMs = 200;
 static constexpr uint32_t kMaxLidarAgeMs = 500;
 
@@ -21,6 +23,8 @@ Route route(lidar);
 WEBpage web;
 LCDDisplay oled;
 bool oledReady = false;
+RunLog runLog;
+
 // Reads the IMU in the background, because its calibration wait can take a long time.
 void imuTask(void* parameter) {
   if (!initBNO055(21, 22)) {
@@ -66,7 +70,6 @@ static void startWiFi() {
 // Line 1: rover name, line 2: web page address, line 3: rover battery.
 static void updateOled() {
   char battery[21];
-  oledReady = i2cPresent(0x3C) && oled.begin();
   if (!rover.connected()) {
     snprintf(battery, sizeof(battery), "Rover: searching");
   } else if (rover.voltage() > 0) {
@@ -82,7 +85,8 @@ void setup() {
   startWiFi();   // first, because the rover only looks for the box while it boots
   web.begin();
   Wire.begin(21, 22);   // the IMU and the OLED share these pins
-  oledReady = oled.begin();
+  oledReady = i2cPresent(0x3C) && oled.begin();
+
   if (!oledReady) Serial.println("OLED not found");
 
   LidarScan::Config config;
@@ -90,9 +94,30 @@ void setup() {
   lidar.begin(Serial1, config);
 
   rover.begin();
+  runLog.begin();
   xTaskCreatePinnedToCore(imuTask, "imu", 4096, nullptr, 3, nullptr, 1);
   xTaskCreatePinnedToCore(roverLinkTask, "roverLink", 6144, nullptr, 1, nullptr, 0);
 }
+
+// One row of the run log: what the rover measured and what it asked the wheels to do.
+static void addLogRow(const Route::Input& in, uint32_t runMs) {
+  RunLog::Row row;
+  row.ms = runMs;
+  row.step = route.step();
+  row.blocked = route.blocked();
+  row.left = lroundf(route.left() * 100);
+  row.right = lroundf(route.right() * 100);
+  row.heading = lroundf(in.headingDeg * 10);
+  row.target = lroundf(route.targetHeading() * 10);
+  row.distanceCm = lroundf(route.totalM() * 100);
+  row.frontCm = lidar.distanceMm(0) / 10;
+  row.leftCm = lidar.distanceMm(270) / 10;
+  row.rightCm = lidar.distanceMm(90) / 10;
+  row.pillars = route.pillars();
+  row.walls = route.walls();
+  runLog.add(row);
+}
+
 
 static void publishStatus(const Route::Input& in) {
   WEBpage::Status s;
@@ -121,7 +146,7 @@ static void publishStatus(const Route::Input& in) {
 }
 
 void loop() {
-  static uint32_t lastRouteMs = 0, lastPageMs = 0;
+  static uint32_t lastRouteMs = 0, lastPageMs = 0, lastLogMs = 0, runStartMs = 0;
   static uint32_t lastPackets = 0, lastPacketMs = 0;
 
   lidar.update();   // read every LiDAR byte that is waiting
@@ -147,10 +172,18 @@ void loop() {
 
     const auto command = web.takeCommand();
     if (command == WEBpage::Command::Stop) route.stopNow("You pressed Stop");
-    if (command == WEBpage::Command::Start && !route.running()) route.start(in);
+    if (command == WEBpage::Command::Start && !route.running()) {
+    route.start(in);
+    runLog.clear();
+    runStartMs = nowMs;
+  }
 
     route.update(in);
     rover.setDrive(route.left(), route.right());
+    if (route.running() && nowMs - lastLogMs >= kLogPeriodMs) {
+    lastLogMs = nowMs;
+    addLogRow(in, nowMs - runStartMs);
+    }
 
     if (nowMs - lastPageMs >= kPagePeriodMs) {
       lastPageMs = nowMs;

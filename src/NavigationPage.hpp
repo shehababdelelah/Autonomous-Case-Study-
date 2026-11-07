@@ -42,6 +42,7 @@ button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;
 <header><h1>Rover 8</h1><span class="tag" id="link">Connecting</span></header>
 <section class="card idle" id="status"><p id="title">Connecting</p><p id="why">Waiting for the box.</p></section>
 <div class="buttons"><button id="start" disabled>Start</button><button id="stop">STOP</button></div>
+<p><a href="/log.csv">Download the last run (CSV)</a></p>
 <section class="card"><h2>Checks</h2>
  <div class="row"><span>Rover link</span><span id="roverOk">-</span></div>
  <div class="row"><span>IMU</span><span id="imuOk">-</span></div>

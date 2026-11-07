@@ -1,5 +1,6 @@
 #include "WEBpage.hpp"
 #include "NavigationPage.hpp"
+#include "RunLog.hpp"
 
 void WEBpage::begin() {
   mutex_ = xSemaphoreCreateMutex();
@@ -18,6 +19,7 @@ void WEBpage::begin() {
     stopPending_ = true;
     r->send(200, "application/json", "{\"ok\":true}");
   });
+  server_.on("/log.csv", HTTP_GET, [](AsyncWebServerRequest* r) { runLog.send(r); });
   server_.begin();
 }
 

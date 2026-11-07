@@ -9,17 +9,17 @@
 // 3 forward, no LiDAR    4 count 5 pillars and 2 walls
 // 5 forward after C      6 turn right 90
 // 7 drive to wall E
-constexpr int kLastStep = 1;
+constexpr int kLastStep = 2;
 
 // ---- Driving ----
-constexpr float kDriveSpeed = 0.30f;            // rover command, 0.5 = 100% power
-constexpr float kRealSpeedMps = 0.50f;          // MEASURE: real speed at kDriveSpeed
-constexpr float kRightTrim = 0.20f / 0.30f;     // right side is stronger, from Robot_8
-constexpr float kRampPerSec = 0.20f;            // soft start and soft stop
+constexpr float kDriveSpeed = 0.45f;    // was 0.30f: the weak left side needs more power
+constexpr float kRightTrim  = 0.20f;    // was 0.20f / 0.30f: right gets 0.45 x 0.20 = 0.09
+constexpr float kRampPerSec = 0.30f;    // was 0.20f: start and stop still take 1.5 s
+constexpr float kRealSpeedMps = 0.17f;          // MEASURE: real speed at kDriveSpeed
 constexpr uint32_t kPauseMs = 1000;             // stop time between two steps
 
 // ---- Route distances, in metres ----
-constexpr float kFirstForwardM = 0.90f;         // out of the door
+constexpr float kFirstForwardM =  0.90f;          // or 0.98f, see above// was 0.90f, only for this test        // out of the door
 constexpr float kNoLidarForwardM = 0.50f;       // after the left turn, before counting
 constexpr float kAfterPillarsM = 3.00f;         // MEASURE: your map label says 6.66 m
 constexpr float kCountMaxM = 40.0f;             // stop if the pillars are not found
