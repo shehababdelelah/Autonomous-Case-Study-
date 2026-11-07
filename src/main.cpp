@@ -897,7 +897,9 @@ void campusNavTask(void*) {
     } else if(command==WEBpage::Command::Start) {
       if(!kEnableNavigationTest) {
         active=false;state="FAULT";phase="fault";note="Navigation disabled by kEnableNavigationTest";
-      } else {
+    } else if(!linkOk) {
+        active=false;state="IDLE";phase="idle";note="Start refused: rover is not connected";
+    } else {
         active=true;navStarted=false;tracking=false;stableSamples=0;lastSample=0;
         started=now;elapsed=0;lastStage=0;nav=CampusNavTest(0,now);
         state="WAITING";phase="running";note="Waiting for fresh inputs and stable IMU";

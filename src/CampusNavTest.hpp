@@ -681,10 +681,10 @@ class CampusNavTest {
   static constexpr float kMetersPerSecondPerCommand = 1.0f; // UNCALIBRATED
 
   // Tune conservatively to rover + gearbox. Units are RoverLink command/s.
-  static constexpr float kCruiseCommand = 0.12f;
+  static constexpr float kCruiseCommand = 0.30f;
   static constexpr float kMaxTurnCommand = 0.085f;
-  static constexpr float kMaxCommandSlewPerSecond = 0.06f;
-  static constexpr float kEstimatedBrakeMps2 = 0.06f;
+  static constexpr float kMaxCommandSlewPerSecond = 0.20f;
+  static constexpr float kEstimatedBrakeMps2 = 0.50f;
   static constexpr float kInitialForwardM = 0.50f;
   static constexpr float kAfterFifthPillarM = 0.80f; // measure chassis clearance!
 
@@ -903,8 +903,8 @@ class CampusNavTest {
     float turn = constrain(0.003f * errorDeg - 0.00025f * yawRateDps,
                            -0.025f, 0.025f);
     if (forward <= 0.0f) turn = 0.0f; // stop fully before turning state
-    left = constrain(forward + turn, -0.18f, 0.18f);
-    right = constrain(forward - turn, -0.18f, 0.18f);
+    left = constrain(forward + turn, -0.45f, 0.45f);
+    right = constrain(forward - turn, -0.45f, 0.45f);
   }
   void turnToward(float errorDeg, float yawRateDps,
                   float& left, float& right) {
