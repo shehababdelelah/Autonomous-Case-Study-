@@ -141,3 +141,6 @@ void LD20_Lidar::calculateAngles(const RawLidarPacket& raw_packet) {
     }
   }
 }
+
+
+

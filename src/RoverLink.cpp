@@ -182,47 +182,80 @@ int RoverLink::_cmd(uint32_t ipAddress, const String& json, String* reply) {
 
 // Finds the rover among devices connected to this box's Wi-Fi access point.
 bool RoverLink::_find() {
-  wifi_sta_list_t list;
+  wifi_sta_list_t list = {};
 
-  if (esp_wifi_ap_get_sta_list(&list) != ESP_OK) {
+  const esp_err_t listResult =
+      esp_wifi_ap_get_sta_list(&list);
+
+  if (listResult != ESP_OK) {
+    Serial.printf(
+        "[rover] station-list error: %d\n",
+        static_cast<int>(listResult));
     return false;
   }
 
   static uint32_t lastLogMs = 0;
-  if (millis() - lastLogMs > 10000) {
+
+  if (millis() - lastLogMs >= 10000) {
     lastLogMs = millis();
-    Serial.printf("[rover] searching, %d station(s) on the AP\n", list.num);
+
+    Serial.printf(
+        "[rover] searching, %d station(s) on the AP\n",
+        list.num);
   }
 
   esp_netif_t* ap =
-    esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+      esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
   if (ap == nullptr) {
+    Serial.println("[rover] AP network interface not found");
     return false;
   }
 
   for (int i = 0; i < list.num; ++i) {
     esp_netif_pair_mac_ip_t pair = {};
-    memcpy(pair.mac, list.sta[i].mac, 6);
+    memcpy(pair.mac, list.sta[i].mac, sizeof(pair.mac));
 
-    if (esp_netif_dhcps_get_clients_by_mac(ap, 1, &pair) != ESP_OK ||
-        pair.ip.addr == 0) {
+    const esp_err_t ipResult =
+        esp_netif_dhcps_get_clients_by_mac(ap, 1, &pair);
+
+    if (ipResult != ESP_OK || pair.ip.addr == 0) {
+      Serial.printf(
+          "[rover] client %d: IP lookup failed, result=%d\n",
+          i,
+          static_cast<int>(ipResult));
       continue;
     }
 
+    // Probe THIS device while pair is still in scope.
     String reply;
-    if (_cmd(pair.ip.addr, "{\"T\":405}", &reply) == 200 &&
-        reply.indexOf("wifi_mode_on_boot") >= 0) {
+
+    const int httpCode =
+        _cmd(pair.ip.addr, "{\"T\":405}", &reply);
+
+    const bool recognized =
+        reply.indexOf("wifi_mode_on_boot") >= 0;
+
+    Serial.printf(
+        "[rover] probe %s HTTP=%d recognized=%s\n",
+        IPAddress(pair.ip.addr).toString().c_str(),
+        httpCode,
+        recognized ? "yes" : "no");
+
+    if (httpCode == 200 && recognized) {
       _failRow = 0;
       _ipRaw = pair.ip.addr;
-      Serial.printf("[rover] found at %s\n", IPAddress(_ipRaw).toString().c_str());
+
+      Serial.printf(
+          "[rover] found at %s\n",
+          IPAddress(_ipRaw).toString().c_str());
+
       return true;
     }
-  }
+  }  // Close the loop AFTER checking each device.
 
-  return false;
+  return false;  // No matching device was found.
 }
-
 // Runs in the background: finds the rover, ramps wheel speeds, and sends commands.
 void RoverLink::update() {
   const uint32_t startMs = millis();
