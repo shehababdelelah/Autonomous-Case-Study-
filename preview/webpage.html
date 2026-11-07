@@ -1,0 +1,325 @@
+<!doctype html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><title>CAS Box — UI preview</title>
+<style>
+:root{--bg:#0b0f17;--card:#121a27;--muted:#9aa4b2;--text:#e7edf5;--acc:#4ea1ff;--warn:#ffb020;}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+.wrap{max-width:980px;margin:0 auto;padding:16px;}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.title{font-size:18px;font-weight:700;}
+.pill{font-size:12px;color:var(--muted);padding:6px 10px;border:1px solid rgba(255,255,255,.08);border-radius:999px;}
+.card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:14px;margin-top:12px;}
+.label{font-size:12px;color:var(--muted);}
+.value{font-size:16px;font-weight:650;}
+.sectionTitle{font-size:13px;color:var(--muted);margin:0 0 8px;}
+.hidden{display:none;}
+button{appearance:none;border:0;border-radius:14px;font-weight:650;cursor:pointer;color:var(--text);
+ background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);}
+.btnTiny{padding:10px 12px;font-size:13px;}
+.stop{background:linear-gradient(180deg,rgba(255,90,95,.95),rgba(255,90,95,.75));color:#190406;}
+.pad{display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(3,72px);gap:10px;
+ justify-content:center;margin:6px 0 10px;touch-action:none;user-select:none;-webkit-user-select:none;}
+.pad button{font-size:24px;touch-action:none;}
+.pad button.on{outline:3px solid var(--acc);}
+.table{width:100%;border-collapse:collapse;font-size:13px;}
+.table td{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.06);}
+.k{color:var(--muted);}
+canvas{display:block;margin:0 auto;max-width:100%;}
+.lidar-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0;}
+.lidar-metric{background:#0d1420;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:9px;}
+.lidar-metric small{display:block;color:var(--muted);font-size:11px;}
+.lidar-metric strong{font-size:17px;}
+.lidar-layout{display:grid;grid-template-columns:minmax(260px,1fr) minmax(280px,1fr);gap:14px;align-items:start;}
+.lidar-table-wrap{max-height:360px;overflow:auto;}
+.lidar-table{width:100%;border-collapse:collapse;font-size:13px;}
+.lidar-table th,.lidar-table td{text-align:left;padding:9px 7px;border-bottom:1px solid rgba(255,255,255,.07);white-space:nowrap;}
+.lidar-table th{color:var(--muted);font-weight:550;position:sticky;top:0;background:var(--card);}
+.return-id{color:#d9eaff;font-weight:700;}
+@media(max-width:680px){.lidar-layout{grid-template-columns:1fr;}.lidar-summary{gap:6px;}.lidar-metric strong{font-size:15px;}}
+</style></head><body><div role="note" style="padding:12px 16px;background:#183652;color:#e7edf5;text-align:center;font:14px system-ui"><strong>LOCAL PREVIEW</strong> · Simulated sensor readings · Buttons only affect this preview; no robot connection</div><div class='wrap'>
+<div class='top'><div class='title'>CAS Box — UI preview</div><div class='pill' id='conn'>-</div>
+ <button id='devBtn' class='btnTiny'>Dev</button></div>
+<div class='card'><div class='label'>State</div><div class='value' id='state'>-</div></div>
+  <div class='card hidden' id='driveCard'><div class='sectionTitle'>Drive</div>
+ <div class='pad'>
+  <span></span><button data-d='f'>&#9650;</button><span></span>
+  <button data-d='l'>&#9664;</button><button class='stop' data-d='s'>&#9632;</button><button data-d='r'>&#9654;</button>
+  <span></span><button data-d='b'>&#9660;</button><span></span>
+ </div>
+ <div class='label'>Tap a direction to move for 5 seconds. Releasing does not stop the rover; press Stop to cancel immediately.</div>
+ </div>
+<div class='card'>
+ <div class='sectionTitle'>Surroundings (LiDAR top view, front = up, rings 1 m)</div>
+ <div class='label'>Adjacent scan bins are grouped by range continuity. These are measured returns, not wall/pillar/panel classifications.</div>
+ <div class='lidar-summary'>
+  <div class='lidar-metric'><small>Valid scan bins</small><strong id='lidarBinCount'>--</strong></div>
+  <div class='lidar-metric'><small>Nearest return</small><strong id='lidarNearest'>--</strong></div>
+  <div class='lidar-metric'><small>Scan age</small><strong id='lidarAge'>--</strong></div>
+ </div>
+ <div class='lidar-layout'>
+  <div>
+   <canvas id='envCv' width='320' height='320' role='img' aria-label='Live LiDAR top view with rover front pointing up'></canvas>
+   <div class='label' id='lidarInfo'>-</div>
+  </div>
+  <div class='lidar-table-wrap'>
+   <table class='lidar-table'>
+    <thead><tr><th>Return</th><th>Side / angle</th><th>Distance</th><th>Bins</th></tr></thead>
+    <tbody id='lidarReturns'><tr><td colspan='4'>Waiting for LiDAR scan...</td></tr></tbody>
+   </table>
+   <div class='label' id='lidarReturnCount'></div>
+  </div>
+ </div>
+ <table class='table' id='usTable'></table></div>
+<div class='card'><div class='sectionTitle'>IMU BNO055 readings / GPS</div><table class='table' id='navTable'></table>
+ <div class='label' id='imuDiag'>Waiting for IMU data</div></div>
+<div id='devRoot' class='hidden'>
+ <div class='card'><div class='sectionTitle'>Values</div><table class='table' id='valTable'></table></div>
+ <div class='card'><div class='sectionTitle'>UI task time (box)</div>
+  <table class='table'><tr><td class='k'>min / avg / max</td><td id='cycle'>-</td></tr></table></div>
+</div></div>
+<script>
+// Preview only: intercept every fetch locally. Never send requests to a robot.
+(() => {
+  const started = Date.now();
+  let left = 0, right = 0, lastDrive = 0, pageId = '', sequence = 0;
+  const reply = (status, data) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => data
+  });
+
+  function snapshot() {
+    const uptime = Date.now() - started;
+    const t = uptime / 1000;
+    if (Date.now() - lastDrive > 500) left = right = 0;
+    const leftCm = Math.round(135 + 5 * Math.sin(t));
+    const ranges = Array.from({length: 90}, (_, i) => {
+      const degrees = i * 4 + 2;
+      const a = degrees * Math.PI / 180;
+      // Simulate front, right, and left walls with an opening behind the rover.
+      if (degrees > 150 && degrees < 225) return 0;
+      const hits = [];
+      if (Math.cos(a) > 0.05) hits.push(180 / Math.cos(a));
+      if (Math.sin(a) > 0.05) hits.push(220 / Math.sin(a));
+      if (Math.sin(a) < -0.05) hits.push(leftCm / -Math.sin(a));
+      const distance = Math.min(...hits) + 1.5 * Math.sin(t + i);
+      return Number.isFinite(distance) && distance <= 300 ? Math.round(distance) : 0;
+    });
+    const moving = left !== 0 || right !== 0;
+    return {
+      state: moving ? `Preview: driving (left ${left.toFixed(2)}, right ${right.toFixed(2)})`
+        : 'Preview: stopped — simulated sensors running',
+      values: [
+        {name: 'Mode', value: 'Browser simulation'},
+        {name: 'Left speed', value: left.toFixed(2)},
+        {name: 'Right speed', value: right.toFixed(2)},
+        {name: 'Uptime', value: `${Math.floor(t)} s`}
+      ],
+      cycle: {min: 9.8, avg: 10, max: 10.6},
+      lidarAgeMs: 25,
+      sensors: {
+        us: [180, leftCm, 220, 300, 165], usMax: 300,
+        lidar: {ok: true, d: ranges, pps: 340, crc: 0},
+        imu: {
+          ok: true, sample: true, ageMs: 25, timestampMs: uptime,
+          heading: (90 + 2 * Math.sin(t / 3)).toFixed(1),
+          roll: (0.8 * Math.sin(t)).toFixed(1),
+          pitch: (0.5 * Math.cos(t)).toFixed(1), cal: [3, 3, 3, 3]
+        },
+        gps: {chars: 12000 + Math.floor(t) * 100, fix: false, sats: 4, hdop: 2.1}
+      }
+    };
+  }
+
+  window.fetch = async (input) => {
+    const url = new URL(String(input), 'http://preview.local');
+    if (url.pathname === '/values') return reply(200, snapshot());
+    if (url.pathname === '/drive') {
+      const id = url.searchParams.get('id');
+      const n = Number(url.searchParams.get('n'));
+      if (id === pageId && n <= sequence) return reply(200, {ok: false, stale: true});
+      pageId = id;
+      sequence = n;
+      const l = Number(url.searchParams.get('l'));
+      const r = Number(url.searchParams.get('r'));
+      left = l;
+      right = r;
+      lastDrive = Date.now();
+      return reply(200, {ok: true});
+    }
+    return reply(404, {ok: false, error: 'This route is not simulated'});
+  };
+})();
+
+</script>
+<script>
+const MAX_SPEED=0.50, ENV_MAX_CM=300;
+const DRIVE_SPEED=MAX_SPEED, TURN_SPEED=Math.min(0.1,MAX_SPEED), DRIVE_DURATION_MS=5000;
+const $=id=>document.getElementById(id);
+const esc=s=>(''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+// ---- "Dev" view toggle
+let dev=false;
+$('devBtn').onclick=()=>{dev=!dev;$('devRoot').classList.toggle('hidden',!dev);$('devBtn').textContent=dev?'Hide':'Dev';};
+
+let drv=null,drvTimer=null,drvBtn=null,drvStopTimer=null,drvDeadline=0;
+// Requests can overtake each other on Wi-Fi. Each command carries this page's random id and a
+// rising number; the box ignores anything older than the last command it accepted.
+const PAGE_ID=Math.floor(Math.random()*4e9)+1;let seq=0;
+function drvSend(l,r){seq++;return fetch('/drive?l='+l.toFixed(2)+'&r='+r.toFixed(2)+'&id='+PAGE_ID+'&n='+seq).catch(()=>null);}
+function drvClear(){clearInterval(drvTimer);clearTimeout(drvStopTimer);drvTimer=null;drvStopTimer=null;drv=null;if(drvBtn){drvBtn.classList.remove('on');drvBtn=null;}}
+function drvStop(){drvClear();drvSend(0,0);}
+function drvRun(m,b,runMs){
+  drvClear();
+  drv=m;drvBtn=b;b.classList.add('on');drvSend(m[0],m[1]);
+  drvDeadline=performance.now()+runMs;
+  drvTimer=setInterval(()=>{if(performance.now()>=drvDeadline){drvStop();return;}drvSend(drv[0],drv[1]);},150);
+  drvStopTimer=setTimeout(drvStop,runMs);
+}
+function drvStart(b){
+  if(b.dataset.d==='s'){drvStop();return;}
+  const s=DRIVE_SPEED;
+  const turnForward=s,turnBackward=TURN_SPEED;
+  const m={f:[s,s],b:[-s,-s],l:[-turnBackward,turnForward],r:[turnForward,-turnBackward]}[b.dataset.d];
+  drvRun(m,b,DRIVE_DURATION_MS);  // switching keys: no stop in between, the new command follows directly
+}
+if(MAX_SPEED>0){
+  $('driveCard').classList.remove('hidden');
+  document.querySelectorAll('.pad button').forEach(b=>{
+    b.addEventListener('pointerdown',e=>{e.preventDefault();b.setPointerCapture(e.pointerId);drvStart(b);});
+    b.addEventListener('pointercancel',()=>{if(drvBtn===b)drvStop();});
+    b.addEventListener('contextmenu',e=>e.preventDefault());
+  });
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden&&drvBtn)drvStop();
+  });
+  window.addEventListener('blur',()=>{
+    if(drvBtn)drvStop();
+  });
+}
+
+function lidarSegments(d){
+  const N=d.length,step=360/Math.max(N,1);
+  const points=d.map((cm,i)=>{
+    if(!cm||cm>ENV_MAX_CM)return null;
+    const angle=(i*step+step/2)%360,rad=angle*Math.PI/180;
+    return {i,cm,angle,x:cm*Math.sin(rad),y:-cm*Math.cos(rad)};
+  });
+  const near=(a,b)=>a&&b&&Math.abs(a.cm-b.cm)<Math.max(30,0.25*Math.min(a.cm,b.cm));
+  const groups=[];
+  let group=[];
+  for(let i=0;i<N;i++){
+    if(!points[i]){
+      if(group.length)groups.push(group);
+      group=[];
+      continue;
+    }
+    if(group.length&&!near(points[i-1],points[i])){
+      groups.push(group);
+      group=[];
+    }
+    group.push(points[i]);
+  }
+  if(group.length)groups.push(group);
+  if(groups.length>1){
+    const first=groups[0],last=groups[groups.length-1];
+    if(near(last[last.length-1],first[0])){
+      groups[0]=last.concat(first);
+      groups.pop();
+    }
+  }
+  const median=values=>{
+    values.sort((a,b)=>a-b);
+    const mid=Math.floor(values.length/2);
+    return values.length%2?values[mid]:(values[mid-1]+values[mid])/2;
+  };
+  return groups.map((items,index)=>{
+    const sin=items.reduce((sum,p)=>sum+Math.sin(p.angle*Math.PI/180),0);
+    const cos=items.reduce((sum,p)=>sum+Math.cos(p.angle*Math.PI/180),0);
+    const angle=(Math.atan2(sin,cos)*180/Math.PI+360)%360;
+    const side=angle<45||angle>=315?'Front':angle<135?'Right':angle<225?'Back':'Left';
+    return {
+      id:index+1,items,angle,side,
+      distance:median(items.map(p=>p.cm)),
+      x:items.reduce((sum,p)=>sum+p.x,0)/items.length,
+      y:items.reduce((sum,p)=>sum+p.y,0)/items.length
+    };
+  });
+}
+
+// ---- LiDAR top view: front is bin zero and points clockwise in the rover frame.
+function drawEnv(s,segments){
+  const cv=$('envCv'),g=cv.getContext('2d'),W=cv.width,c=W/2,k=(c-12)/ENV_MAX_CM;
+  g.clearRect(0,0,W,W);
+  g.strokeStyle='rgba(255,255,255,.12)';g.lineWidth=1;
+  for(let m=100;m<=ENV_MAX_CM;m+=100){g.beginPath();g.arc(c,c,m*k,0,2*Math.PI);g.stroke();}
+  const d=(s.lidar&&s.lidar.d)||[],N=d.length,st=360/Math.max(N,1);
+  const P=d.map((cm,i)=>{if(!cm||cm>ENV_MAX_CM)return null;const a=(i*st+st/2)*Math.PI/180;
+    return [c+cm*k*Math.sin(a),c-cm*k*Math.cos(a),cm];});
+  const near=(p,q)=>p&&q&&Math.abs(p[2]-q[2])<Math.max(30,0.25*Math.min(p[2],q[2]));
+  g.strokeStyle='#4ea1ff';g.fillStyle='#4ea1ff';g.lineWidth=2;g.lineCap='round';
+  for(let i=0;i<N;i++){const p=P[i];if(!p)continue;const q=P[(i+1)%N];
+    if(near(p,q)){g.beginPath();g.moveTo(p[0],p[1]);g.lineTo(q[0],q[1]);g.stroke();}
+    g.beginPath();g.arc(p[0],p[1],3,0,2*Math.PI);g.fill();}
+  g.font='bold 11px system-ui';g.textAlign='left';g.textBaseline='middle';
+  for(const segment of segments.slice(0,24)){
+    const x=c+segment.x*k,y=c+segment.y*k;
+    g.lineWidth=3;g.strokeStyle='#0b0f17';g.strokeText('R'+segment.id,x+5,y-5);
+    g.fillStyle='#d9eaff';g.fillText('R'+segment.id,x+5,y-5);
+  }
+  g.fillStyle='#e7edf5';g.fillRect(c-9,c-12,18,24);  // box
+  g.fillStyle='#ffb020';g.beginPath();g.moveTo(c,c-20);g.lineTo(c-6,c-12);g.lineTo(c+6,c-12);g.fill();  // front
+}
+
+// ---- sensor cards
+function renderSensors(s,lidarAgeMs){
+  if(!s)return;
+  const L=s.lidar||{};
+  const d=L.d||[],valid=d.filter(cm=>cm>0&&cm<=ENV_MAX_CM);
+  const segments=lidarSegments(d);
+  drawEnv(s,segments);
+  $('lidarBinCount').textContent=valid.length+' / '+d.length;
+  $('lidarNearest').textContent=valid.length?Math.min(...valid)+' cm':'--';
+  $('lidarAge').textContent=Number.isFinite(lidarAgeMs)?lidarAgeMs+' ms':'--';
+  $('lidarInfo').textContent=L.ok?('LiDAR '+L.pps+' packets/s, checksum errors '+L.crc+' %'):'LiDAR: no data';
+  const shown=segments.slice(0,24);
+  $('lidarReturns').innerHTML=shown.length?shown.map(segment=>
+    `<tr><td class='return-id'>R${segment.id}</td><td>${segment.side} · ${Math.round(segment.angle)}&deg;</td>`
+    +`<td>${segment.distance.toFixed(0)} cm</td><td>${segment.items.length}</td></tr>`
+  ).join(''):`<tr><td colspan='4'>No valid returns within ${ENV_MAX_CM} cm</td></tr>`;
+  $('lidarReturnCount').textContent=segments.length>shown.length
+    ?`Showing ${shown.length} of ${segments.length} returns`:`${segments.length} return segments`;
+  const us=s.us||[],names=['Front','Left','Right','Back','Front angled'];
+  $('usTable').innerHTML=names.map((n,i)=>`<tr><td class='k'>Ultrasonic ${n}</td><td>${
+    (us[i]===undefined||us[i]>=s.usMax)?'-':us[i]+' cm'}</td></tr>`).join('');
+  const I=s.imu||{},G=s.gps||{};
+  const age=I.ageMs===null?'no sample':I.ageMs+' ms old';
+  $('imuDiag').textContent=I.sample?'Latest IMU sample: '+age
+    :(I.ok?'Waiting for the first IMU sample':'BNO055 not initialized');
+  let t=I.ok&&I.sample
+    ?`<tr><td class='k'>Heading / yaw (BNO055)</td><td>${I.heading}&deg;</td></tr>`
+    +`<tr><td class='k'>Roll (BNO055)</td><td>${I.roll}&deg;</td></tr>`
+    +`<tr><td class='k'>Pitch (BNO055)</td><td>${I.pitch}&deg;</td></tr>`
+    +`<tr><td class='k'>Calibration (system / gyro / accel / mag)</td><td>${(I.cal||[]).join(' / ')} (0–3)</td></tr>`
+    +`<tr><td class='k'>Sample time since boot</td><td>${I.timestampMs} ms</td></tr>`
+    :`<tr><td class='k'>IMU</td><td>${I.ok?'Waiting for first sample':'not found'}</td></tr>`;
+  t+=G.chars?`<tr><td class='k'>GPS</td><td>${G.fix?'fix':'no fix'}, ${G.sats} satellites, HDOP ${G.hdop}</td></tr>`
+    :`<tr><td class='k'>GPS</td><td>no data from the module</td></tr>`;
+  if(G.fix)t+=`<tr><td class='k'>Latitude / longitude</td><td>${G.lat}, ${G.lon}</td></tr>`;
+  $('navTable').innerHTML=t;
+}
+
+// ---- poll the box 4 times per second
+async function poll(){
+  try{
+    const j=await (await fetch('/values',{cache:'no-store'})).json();
+    $('conn').textContent='Online';
+    $('state').textContent=j.state||'-';
+    renderSensors(j.sensors,j.lidarAgeMs);
+    if(dev){
+      $('valTable').innerHTML=(j.values||[]).map(v=>`<tr><td class='k'>${esc(v.name)}</td><td>${esc(v.value)}</td></tr>`).join('');
+      const c=j.cycle||{};$('cycle').textContent=`${c.min} / ${c.avg} / ${c.max} ms`;
+    }
+  }catch(e){$('conn').textContent='Offline';}
+}
+setInterval(poll,250);poll();
+</script></body></html>
