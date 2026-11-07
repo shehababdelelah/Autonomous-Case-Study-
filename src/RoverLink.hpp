@@ -4,43 +4,26 @@
 
 class RoverLink {
 public:
-  // Starts the background link task. Call once from setup().
-  // Initialize the link state. Call once before starting its task.
+  // Call once before starting the link task.
   void begin();
 
-  // Perform one networking cycle. Called only by roverLinkTask().
+  // One networking cycle. Called only by roverLinkTask().
   void update();
 
-  // Sets left/right wheel speed: -0.5 to 0.5.
-  // The background task ramps toward the requested speed.
+  // Wheel speeds: -0.5 to 0.5. Call this all the time; the rover stops if you do not.
   void setDrive(float left, float right);
-
-  // Convenience movement commands. Speed should be 0 to 0.5.
-  void forward(float speed);
-  void backward(float speed);
-  void turnLeft(float speed);
-  void turnRight(float speed);
-  void stop();
+  void stop() { setDrive(0, 0); }
 
   bool connected() const { return _ipRaw != 0; }
   IPAddress ip() const { return IPAddress(_ipRaw); }
   float voltage() const { return _voltage; }
-  float rttMs() const { return _rttMs; }
-  uint32_t okCount() const { return _ok; }
-  uint32_t failCount() const { return _fail; }
 
-  String statusText() const;
-  
 private:
   uint32_t lastFindMs = 0;
 uint32_t lastIdleMs = 0;
-uint32_t lastRampMs = 0;
 
 uint8_t stopsLeft = 0;
 bool idleStatus = false;
-
-float currentLeft = 0;
-float currentRight = 0;
 
   bool _find();
   int _cmd(uint32_t ip, const String& json, String* reply);

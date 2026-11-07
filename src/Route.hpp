@@ -1,0 +1,331 @@
+#pragma once
+#include <Arduino.h>
+#include <math.h>
+#include "LidarScan.h"
+#include "Settings.hpp"
+
+// Returns true once, at the moment something appears. It must stay seen for onMs,
+// and stay gone for offMs before it can count again.
+class AppearFilter {
+ public:
+  AppearFilter(uint32_t onMs, uint32_t offMs) : onMs_(onMs), offMs_(offMs) {}
+
+  void reset(uint32_t nowMs) {
+    present_ = false;
+    changeMs_ = nowMs;
+  }
+
+  bool update(bool seen, uint32_t nowMs) {
+    if (seen == present_) {
+      changeMs_ = nowMs;
+      return false;
+    }
+    if (nowMs - changeMs_ < (seen ? onMs_ : offMs_)) return false;
+    present_ = seen;
+    changeMs_ = nowMs;
+    return present_;
+  }
+
+ private:
+  uint32_t onMs_, offMs_, changeMs_ = 0;
+  bool present_ = false;
+};
+
+class Route {
+ public:
+  // The numbers match kLastStep in Settings.hpp.
+  enum Step : uint8_t {
+    IDLE, FORWARD_OUT, TURN_LEFT, FORWARD_NO_LIDAR, COUNT_PILLARS,
+    FORWARD_AFTER_C, TURN_RIGHT, DRIVE_TO_END, DONE, FAULT
+  };
+
+  struct Input {
+    uint32_t nowMs;
+    float headingDeg;   // 0 to 360, clockwise is positive
+    bool imuOk, roverOk, lidarOk;
+  };
+
+  explicit Route(const LidarScan& lidar) : lidar_(lidar) {}
+
+  void start(const Input& in) {
+    startHeading_ = targetHeading_ = in.headingDeg;
+    pillars_ = walls_ = panels_ = 0;
+    speed_ = pull_ = totalM_ = 0;
+    blocked_ = pausing_ = false;
+    lastMs_ = in.nowMs;
+    enterStep(FORWARD_OUT, in.nowMs);
+    note_ = "Driving";
+  }
+
+  void stopNow(const char* why) {
+    step_ = IDLE;
+    note_ = why;
+    speed_ = left_ = right_ = 0;
+  }
+
+  // Call this every 50 ms.
+  void update(const Input& in) {
+    const float dt = (in.nowMs - lastMs_) / 1000.0f;
+    lastMs_ = in.nowMs;
+
+    if (step_ == IDLE || step_ == DONE || step_ == FAULT) {
+      left_ = right_ = 0;
+      return;
+    }
+    if (!in.roverOk) return fail("Rover link lost");
+    if (!in.imuOk) return fail("IMU data lost");
+    if (!in.lidarOk) return fail("LiDAR data lost");
+    if (pausing_) return pause(in.nowMs, dt);
+
+    switch (step_) {
+      case FORWARD_OUT:
+        driveStraight(in, dt);
+        if (reached(kFirstForwardM)) finishStep(in.nowMs);
+        break;
+
+      case TURN_LEFT:
+        if (turnFinished(in)) finishStep(in.nowMs);
+        break;
+
+      case FORWARD_NO_LIDAR:
+        driveStraight(in, dt);
+        if (stepM_ >= kNoLidarForwardM) nextStepNoStop(in.nowMs);
+        break;
+
+      case COUNT_PILLARS:
+        driveStraight(in, dt);
+        if (pillarFilter_.update(pillarOnRight(), in.nowMs)) ++pillars_;
+        if (wallFilter_.update(wallOnLeft(), in.nowMs)) ++walls_;
+        if (pillars_ >= kPillarsNeeded && walls_ >= kWallsNeeded) nextStepNoStop(in.nowMs);
+        else if (stepM_ >= kCountMaxM) fail("Pillars or walls not found");
+        break;
+
+      case FORWARD_AFTER_C:
+        driveStraight(in, dt);
+        if (reached(kAfterPillarsM)) finishStep(in.nowMs);
+        break;
+
+      case TURN_RIGHT:
+        if (turnFinished(in)) finishStep(in.nowMs);
+        break;
+
+      case DRIVE_TO_END:
+        driveStraight(in, dt);
+        if (panelFilter_.update(panelOnRight(), in.nowMs)) ++panels_;
+        if (panels_ >= kPanelsNeeded && frontWallSeen()) finishStep(in.nowMs);
+        else if (stepM_ >= kToEndMaxM) fail("Wall E not found");
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  // Everything the page needs to show.
+  Step step() const { return step_; }
+  bool running() const { return step_ != IDLE && step_ != DONE && step_ != FAULT; }
+  bool blocked() const { return blocked_; }
+  float left() const { return left_; }
+  float right() const { return right_; }
+  int pillars() const { return pillars_; }
+  int walls() const { return walls_; }
+  int panels() const { return panels_; }
+  float totalM() const { return totalM_; }
+  float targetHeading() const { return targetHeading_; }
+  const char* note() const { return note_; }
+
+  static const char* name(Step step) {
+    switch (step) {
+      case IDLE: return "Not started";
+      case FORWARD_OUT: return "Forward out of the door";
+      case TURN_LEFT: return "Turning left";
+      case FORWARD_NO_LIDAR: return "Forward, no LiDAR decisions";
+      case COUNT_PILLARS: return "Counting pillars and walls";
+      case FORWARD_AFTER_C: return "Forward after wall C";
+      case TURN_RIGHT: return "Turning right";
+      case DRIVE_TO_END: return "Driving to wall E";
+      case DONE: return "Finished";
+      case FAULT: return "Stopped by safety";
+    }
+    return "Unknown";
+  }
+
+ private:
+  static float wrap180(float deg) {
+    while (deg > 180.0f) deg -= 360.0f;
+    while (deg <= -180.0f) deg += 360.0f;
+    return deg;
+  }
+
+  static float wrap360(float deg) {
+    while (deg >= 360.0f) deg -= 360.0f;
+    while (deg < 0.0f) deg += 360.0f;
+    return deg;
+  }
+
+  // ---- What the LiDAR sees ----
+  // Counts the 1-degree directions in a fan that see something between minCm and maxCm.
+  int hits(int centerDeg, int halfDeg, int minCm, int maxCm) const {
+    int count = 0;
+    for (int angle = centerDeg - halfDeg; angle <= centerDeg + halfDeg; ++angle) {
+      const int cm = lidar_.distanceMm(angle) / 10;
+      if (cm >= minCm && cm <= maxCm) ++count;
+    }
+    return count;
+  }
+
+  bool obstacleInFront() const {
+    return hits(0, kFrontConeDeg, kLidarMinCm, kObstacleStopCm + kLidarToFrontCm) >= kObstacleMinHits;
+  }
+  bool wallOnLeft() const {
+    return hits(270, kWallFanDeg, kLidarMinCm, kWallMaxCm) >= kWallMinHits;
+  }
+  bool pillarOnRight() const {
+    return hits(90, kPillarFanDeg, kPillarMinCm, kPillarMaxCm) >= kPillarMinHits;
+  }
+  bool panelOnRight() const {
+    return hits(90, kPanelFanDeg, kPanelMinCm, kPanelMaxCm) >= kPanelMinHits;
+  }
+  bool frontWallSeen() const {
+    return hits(0, kEndWallFanDeg, kLidarMinCm, kEndWallCm) >= kEndWallMinHits;
+  }
+
+  // ---- Moving ----
+  // Stops at once for an obstacle. It stays stopped until the front is clear for kClearMs.
+  bool waitForObstacle(uint32_t nowMs) {
+    if (obstacleInFront()) {
+      blocked_ = true;
+      clearSinceMs_ = nowMs;
+    } else if (blocked_ && nowMs - clearSinceMs_ >= kClearMs) {
+      blocked_ = false;
+    }
+    return blocked_;
+  }
+
+  void driveStraight(const Input& in, float dt) {
+    if (waitForObstacle(in.nowMs)) {
+      speed_ = left_ = right_ = 0;   // no distance is counted while waiting
+      return;
+    }
+
+    speed_ = min(speed_ + kRampPerSec * dt, kDriveSpeed);
+    const float metres = kRealSpeedMps * (speed_ / kDriveSpeed) * dt;
+    stepM_ += metres;
+    totalM_ += metres;
+
+    // Positive error means the rover must turn right, so the left wheel goes faster.
+    const float error = wrap180(targetHeading_ - in.headingDeg);
+    if (speed_ >= kDriveSpeed) {
+      pull_ = constrain(pull_ + kPullGain * error * dt, -kMaxPull, kMaxPull);
+    }
+    float turn = pull_;
+    if (fabsf(error) > kHeadingDeadDeg) {
+      turn += kHeadingGain * (error - copysignf(kHeadingDeadDeg, error));
+    }
+    turn = constrain(turn, -kMaxCorrection, kMaxCorrection);
+    turn = constrain(turn, -speed_, speed_);
+    left_ = speed_ + turn;
+    right_ = (speed_ - turn) * kRightTrim;
+
+    if (fabsf(error) < kMaxHeadingErrorDeg) {
+      headingBadSinceMs_ = in.nowMs;
+    } else if (in.nowMs - headingBadSinceMs_ >= kHeadingErrorMs) {
+      fail("Lost the straight line");
+    }
+  }
+
+  // True when the soft stop will end at this distance, so slowing down starts early.
+  bool reached(float targetM) const {
+    const float stopSeconds = speed_ / kRampPerSec;
+    const float rollM = 0.5f * kRealSpeedMps * (speed_ / kDriveSpeed) * stopSeconds;
+    return stepM_ + rollM >= targetM;
+  }
+
+  // Spins at full power, then uses short pulses near the target.
+  bool turnFinished(const Input& in) {
+    const uint32_t nowMs = in.nowMs;
+    const float error = wrap180(targetHeading_ - in.headingDeg);   // + = turn right
+
+    if (nowMs - stepStartMs_ > kTurnTimeoutMs) {
+      fail("Turn took too long");
+      return false;
+    }
+    if (fabsf(error) > kTurnWrongWayDeg) {
+      fail("Turn went the wrong way");
+      return false;
+    }
+    if (fabsf(error) <= kTurnToleranceDeg) {
+      left_ = right_ = 0;
+      return nowMs - inToleranceSinceMs_ >= kTurnHoldMs;
+    }
+    inToleranceSinceMs_ = nowMs;
+
+    float power = kTurnPower;
+    if (fabsf(error) <= kTurnPulseDeg) {
+      const uint32_t phase = (nowMs - stepStartMs_) % (kTurnPulseOnMs + kTurnPulseOffMs);
+      if (phase >= kTurnPulseOnMs) power = 0;
+    }
+    left_ = error > 0 ? power : -power;
+    right_ = -left_;
+    return false;
+  }
+
+  // ---- Changing steps ----
+  void finishStep(uint32_t nowMs) {
+    nextStep_ = step_ >= kLastStep ? DONE : static_cast<Step>(step_ + 1);
+    pausing_ = true;
+    pauseStartMs_ = nowMs;
+  }
+
+  // Goes to the next step while still driving, unless this is the last test step.
+  void nextStepNoStop(uint32_t nowMs) {
+    if (step_ >= kLastStep) finishStep(nowMs);
+    else enterStep(static_cast<Step>(step_ + 1), nowMs);
+  }
+
+  // Slows to zero, waits kPauseMs, then starts the next step.
+  void pause(uint32_t nowMs, float dt) {
+    speed_ = max(speed_ - kRampPerSec * dt, 0.0f);
+    left_ = speed_;
+    right_ = speed_ * kRightTrim;
+    if (speed_ > 0 || nowMs - pauseStartMs_ < kPauseMs) return;
+    pausing_ = false;
+    if (nextStep_ == DONE) note_ = "Route step finished";
+    enterStep(nextStep_, nowMs);
+  }
+
+  void enterStep(Step next, uint32_t nowMs) {
+    step_ = next;
+    stepStartMs_ = inToleranceSinceMs_ = headingBadSinceMs_ = nowMs;
+    stepM_ = 0;
+    if (next == TURN_LEFT) targetHeading_ = wrap360(startHeading_ - 90.0f);
+    if (next == TURN_RIGHT) targetHeading_ = startHeading_;
+    if (next == COUNT_PILLARS) {
+      pillarFilter_.reset(nowMs);
+      wallFilter_.reset(nowMs);
+    }
+    if (next == DRIVE_TO_END) panelFilter_.reset(nowMs);
+  }
+
+  void fail(const char* why) {
+    step_ = FAULT;
+    note_ = why;
+    speed_ = left_ = right_ = 0;
+    blocked_ = pausing_ = false;
+  }
+
+  const LidarScan& lidar_;
+  AppearFilter pillarFilter_{kPillarSeenMs, kPillarGoneMs};
+  AppearFilter wallFilter_{kWallSeenMs, kWallGoneMs};
+  AppearFilter panelFilter_{kPanelSeenMs, kPanelGoneMs};
+
+  Step step_ = IDLE, nextStep_ = DONE;
+  const char* note_ = "Press Start";
+  float startHeading_ = 0, targetHeading_ = 0;
+  float speed_ = 0, pull_ = 0, left_ = 0, right_ = 0;
+  float stepM_ = 0, totalM_ = 0;
+  int pillars_ = 0, walls_ = 0, panels_ = 0;
+  bool blocked_ = false, pausing_ = false;
+  uint32_t lastMs_ = 0, stepStartMs_ = 0, pauseStartMs_ = 0;
+  uint32_t clearSinceMs_ = 0, inToleranceSinceMs_ = 0, headingBadSinceMs_ = 0;
+};

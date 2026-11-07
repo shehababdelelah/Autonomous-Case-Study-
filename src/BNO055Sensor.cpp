@@ -163,12 +163,8 @@ bool initBNO055(int sdaPin, int sclPin) {
   displaySensorDetails();
   displaySensorStatus();
 
-  if (foundCalibration) {
-  Serial.println("Keep the rover still.");
-
-  if (!waitForBnoCalibration(120000)) {
-    return false;
-  }
+if (foundCalibration) {
+  Serial.println("Using saved BNO055 calibration.");
 } else {
   Serial.println(
       "Keep still, then hold the sensor in six positions.");
@@ -257,12 +253,7 @@ if (!bnoReady) return;
       readBnoVector16(
           Adafruit_BNO055::BNO055_GYRO_DATA_X_LSB_ADDR, gyro);
 
-  if (!readOk) {
-    portENTER_CRITICAL(&imuMux);
-    hasImuData = false;
-    portEXIT_CRITICAL(&imuMux);
-    return;
-  }
+  if (!readOk) return;   // keep the last sample; main.cpp checks its age
 
   ImuData sample{};
   sample.headingDeg = euler[0];

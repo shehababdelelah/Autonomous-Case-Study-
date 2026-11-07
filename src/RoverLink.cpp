@@ -15,47 +15,10 @@ static const uint32_t kIdleEveryMs = 500;
 // Speeds use the range -0.5 to 0.5.
 static const float kMaxSpeed = 0.5f;
 
-// Speed units per second. Increase for faster response; decrease for gentler movement.
-static const float kAcceleration = 0.4f;
-static const float kDeceleration = 0.8f;
-
-// Limit ramp time after delays so one delayed task cycle cannot cause a large speed jump.
-static const float kMaxRampStepSeconds = 0.1f;
-
 static float clampDriveSpeed(float speed) {
   if (speed > kMaxSpeed) return kMaxSpeed;
   if (speed < -kMaxSpeed) return -kMaxSpeed;
   return speed;
-}
-
-static float clampDirectionSpeed(float speed) {
-  if (speed < 0) return 0;
-  if (speed > kMaxSpeed) return kMaxSpeed;
-  return speed;
-}
-
-// Moves current toward target by at most rate * elapsedSeconds.
-// When changing direction, it slows to zero before speeding up the other way.
-static float rampSpeed(float current, float target, float elapsedSeconds) {
-  if ((current > 0 && target < 0) || (current < 0 && target > 0)) {
-    target = 0;
-  }
-
-  const bool slowingDown = fabsf(target) < fabsf(current);
-  const float rate = slowingDown ? kDeceleration : kAcceleration;
-  const float maxChange = rate * elapsedSeconds;
-
-  if (current < target) {
-    const float next = current + maxChange;
-    return next > target ? target : next;
-  }
-
-  if (current > target) {
-    const float next = current - maxChange;
-    return next < target ? target : next;
-  }
-
-  return current;
 }
 
 // Percent-encodes JSON so it can safely go in the HTTP query string.
@@ -80,15 +43,6 @@ static String urlEncode(const String& text) {
 }
 
 void RoverLink::begin() {
-  lastFindMs = 0;
-  lastIdleMs = 0;
-  lastRampMs = millis();
-
-  stopsLeft = 0;
-  idleStatus = false;
-  currentLeft = 0;
-  currentRight = 0;
-
   portENTER_CRITICAL(&_mux);
   _setL = 0;
   _setR = 0;
@@ -102,44 +56,6 @@ void RoverLink::setDrive(float left, float right) {
   _setR = clampDriveSpeed(right);
   _setMs = millis();
   portEXIT_CRITICAL(&_mux);
-}
-
-void RoverLink::forward(float speed) {
-  speed = clampDirectionSpeed(speed);
-  setDrive(speed, speed);
-}
-
-void RoverLink::backward(float speed) {
-  speed = clampDirectionSpeed(speed);
-  setDrive(-speed, -speed);
-}
-
-void RoverLink::turnLeft(float speed) {
-  speed = clampDirectionSpeed(speed);
-  setDrive(-speed, speed);
-}
-
-void RoverLink::turnRight(float speed) {
-  speed = clampDirectionSpeed(speed);
-  setDrive(speed, -speed);
-}
-
-void RoverLink::stop() {
-  setDrive(0, 0);
-}
-
-String RoverLink::statusText() const {
-  if (!connected()) return "Rover: searching ...";
-
-  String text = "Rover " + ip().toString();
-  const float batteryVoltage = _voltage;
-
-  if (batteryVoltage > 0) {
-    text += ", " + String(batteryVoltage, 2) + " V";
-  }
-
-  text += ", " + String(_rttMs, 0) + " ms";
-  return text;
 }
 
 // Sends one JSON command. HTTP 200 means the rover replied successfully.
@@ -256,7 +172,7 @@ bool RoverLink::_find() {
 
   return false;  // No matching device was found.
 }
-// Runs in the background: finds the rover, ramps wheel speeds, and sends commands.
+// Runs in the background: finds the rover and sends the wheel commands.
 void RoverLink::update() {
   const uint32_t startMs = millis();
   const uint32_t roverIp = _ipRaw;
@@ -266,68 +182,45 @@ void RoverLink::update() {
       lastFindMs = startMs;
       _find();
     }
-
     return;
   }
 
-    float targetLeft;
-    float targetRight;
-    uint32_t setMs;
+  float left;
+  float right;
+  uint32_t setMs;
+  portENTER_CRITICAL(&_mux);
+  left = _setL;
+  right = _setR;
+  setMs = _setMs;
+  portEXIT_CRITICAL(&_mux);
 
-    portENTER_CRITICAL(&_mux);
-    targetLeft = _setL;
-    targetRight = _setR;
-    setMs = _setMs;
-    portEXIT_CRITICAL(&_mux);
+  // If the route has not refreshed its command recently, stop.
+  if (millis() - setMs > kDeadmanMs) {
+    left = 0;
+    right = 0;
+  }
 
-    // If main has not refreshed its command recently, request a stop.
-    if (millis() - setMs > kDeadmanMs) {
-      targetLeft = 0;
-      targetRight = 0;
-    }
-
-    float elapsedSeconds = (startMs - lastRampMs) / 1000.0f;
-    lastRampMs = startMs;
-
-    if (elapsedSeconds > kMaxRampStepSeconds) {
-      elapsedSeconds = kMaxRampStepSeconds;
-    }
-
-    if (targetLeft == 0.0f && targetRight == 0.0f) {
-    if (currentLeft != 0.0f || currentRight != 0.0f) {
-    currentLeft = 0.0f;
-    currentRight = 0.0f;
+  if (left != 0 || right != 0) {
+    const String command =
+        String("{\"T\":1,\"L\":") + String(left, 2) + ",\"R\":" + String(right, 2) + "}";
+    _cmd(roverIp, command, nullptr);
     stopsLeft = kStopRepeats;
+  } else if (stopsLeft > 0) {
+    // Repeat the stop until the rover confirms it.
+    if (_cmd(roverIp, "{\"T\":1,\"L\":0,\"R\":0}", nullptr) == 200) {
+      --stopsLeft;
     }
-    } else {
-    currentLeft  = rampSpeed(currentLeft, targetLeft, elapsedSeconds);
-    currentRight = rampSpeed(currentRight, targetRight, elapsedSeconds);
+  } else if (startMs - lastIdleMs >= kIdleEveryMs) {
+    lastIdleMs = startMs;
+    idleStatus = !idleStatus;
+    String reply;
+    if (!idleStatus) {
+      _cmd(roverIp, "{\"T\":1,\"L\":0,\"R\":0}", nullptr);
+    } else if (_cmd(roverIp, "{\"T\":130}", &reply) == 200) {
+      const int voltageIndex = reply.indexOf("\"v\":");
+      if (voltageIndex >= 0) {
+        _voltage = reply.substring(voltageIndex + 4).toFloat();
+      }
     }
-    
-    if (currentLeft != 0 || currentRight != 0) {
-      const String command =
-          String("{\"T\":1,\"L\":") + String(currentLeft, 2) +
-          ",\"R\":" + String(currentRight, 2) + "}";
-
-      _cmd(roverIp, command, nullptr);
-      stopsLeft = kStopRepeats;
-    } else if (stopsLeft > 0) {
-      // Repeat stop commands until the rover confirms them.
-      if (_cmd(roverIp, "{\"T\":1,\"L\":0,\"R\":0}", nullptr) == 200) {
-        --stopsLeft;
-      }
-    } else if (startMs - lastIdleMs >= kIdleEveryMs) {
-      lastIdleMs = startMs;
-      idleStatus = !idleStatus;
-
-      String reply;
-      if (!idleStatus) {
-        _cmd(roverIp, "{\"T\":1,\"L\":0,\"R\":0}", nullptr);
-      } else if (_cmd(roverIp, "{\"T\":130}", &reply) == 200) {
-        const int voltageIndex = reply.indexOf("\"v\":");
-        if (voltageIndex >= 0) {
-          _voltage = reply.substring(voltageIndex + 4).toFloat();
-        }
-      }
   }
 }
