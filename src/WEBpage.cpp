@@ -12,11 +12,17 @@ void WEBpage::begin() {
     r->send(200, "application/json", statusJson());
   });
   server_.on("/api/start", HTTP_POST, [this](AsyncWebServerRequest* r) {
+    // /api/start?log=0 means: do not save this run. Without "log", it is saved as before.
+    logWanted_ = !(r->hasParam("log") && r->getParam("log")->value() == "0");
     startPending_ = true;
     r->send(200, "application/json", "{\"ok\":true}");
   });
   server_.on("/api/stop", HTTP_POST, [this](AsyncWebServerRequest* r) {
     stopPending_ = true;
+    r->send(200, "application/json", "{\"ok\":true}");
+  });
+  server_.on("/api/restart", HTTP_POST, [this](AsyncWebServerRequest* r) {
+    restartPending_ = true;
     r->send(200, "application/json", "{\"ok\":true}");
   });
   server_.on("/log.csv", HTTP_GET, [](AsyncWebServerRequest* r) { runLog.send(r); });
@@ -30,6 +36,12 @@ void WEBpage::publish(const Status& status) {
 }
 
 WEBpage::Command WEBpage::takeCommand() {
+  if (restartPending_) {
+    restartPending_ = false;
+    stopPending_ = false;
+    startPending_ = false;
+    return Command::Restart;
+  }
   if (stopPending_) {
     stopPending_ = false;
     startPending_ = false;
@@ -49,12 +61,12 @@ String WEBpage::statusJson() {
 
   char json[420];
   snprintf(json, sizeof(json),
-           "{\"running\":%d,\"blocked\":%d,\"roverOk\":%d,\"imuOk\":%d,\"lidarOk\":%d,"
+           "{\"running\":%d,\"blocked\":%d,\"logging\":%d,\"roverOk\":%d,\"imuOk\":%d,\"lidarOk\":%d,"   // line 62
            "\"stepNumber\":%d,\"step\":\"%s\",\"note\":\"%s\",\"left\":%.2f,\"right\":%.2f,"
            "\"distanceM\":%.2f,\"voltage\":%.1f,\"pillars\":%d,\"walls\":%d,\"panels\":%d,"
            "\"headingDeg\":%.1f,\"targetDeg\":%.1f,\"frontCm\":%d,\"rightCm\":%d,"
            "\"backCm\":%d,\"leftCm\":%d}",
-           s.running, s.blocked, s.roverOk, s.imuOk, s.lidarOk, s.stepNumber, s.step, s.note,
+           s.running, s.blocked, s.logging, s.roverOk, s.imuOk, s.lidarOk, s.stepNumber, s.step, s.note,   // line 67
            s.left, s.right, s.distanceM, s.voltage, s.pillars, s.walls, s.panels,
            s.headingDeg, s.targetDeg, s.frontCm, s.rightCm, s.backCm, s.leftCm);
   return String(json);

@@ -6,10 +6,11 @@
 
 class WEBpage {
  public:
-  enum class Command : uint8_t { None, Start, Stop };
+  enum class Command : uint8_t { None, Start, Stop, Restart };
 
   struct Status {
     bool running = false, blocked = false;
+    bool logging = true;   // this run is saved as CSV
     bool roverOk = false, imuOk = false, lidarOk = false;
     int stepNumber = 0;
     char step[32] = "Not started";
@@ -23,6 +24,7 @@ class WEBpage {
   void begin();
   void publish(const Status& status);
   Command takeCommand();
+  bool logWanted() const { return logWanted_; }   // the CSV choice sent with the last Start
 
  private:
   String statusJson();
@@ -30,5 +32,6 @@ class WEBpage {
   AsyncWebServer server_{80};
   SemaphoreHandle_t mutex_ = nullptr;
   Status status_{};
-  volatile bool startPending_ = false, stopPending_ = false;
+  volatile bool startPending_ = false, stopPending_ = false, restartPending_ = false;
+  volatile bool logWanted_ = true;
 };

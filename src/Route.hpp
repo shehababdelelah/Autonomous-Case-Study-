@@ -33,11 +33,14 @@ class AppearFilter {
 
 class Route {
  public:
-  // The numbers match kLastStep in Settings.hpp.
+  // The numbers match kLastStep in Settings.hpp. The page uses DONE = 13 and FAULT = 14.
   enum Step : uint8_t {
     IDLE, FORWARD_OUT, TURN_LEFT, FORWARD_NO_LIDAR, COUNT_PILLARS,
-    FORWARD_AFTER_C, TURN_RIGHT, DRIVE_TO_END, DONE, FAULT
+    FORWARD_AFTER_C, TURN_RIGHT, DRIVE_TO_END,
+    TURN_RIGHT_AT_E, FORWARD_ALONG_E, TURN_LEFT_AT_E, FIND_E_SIDE, ALONG_E_SIDE,
+    DONE, FAULT
   };
+
 
   struct Input {
     uint32_t nowMs;
@@ -94,7 +97,11 @@ class Route {
 
       case COUNT_PILLARS:
         driveStraight(in, dt);
-        if (pillarFilter_.update(pillarOnRight(), in.nowMs)) ++pillars_;
+        if (pillarFilter_.update(pillarOnRight(), in.nowMs) &&
+            (pillars_ == 0 || stepM_ - lastPillarM_ >= kPillarMinGapM)) {
+          ++pillars_;               // a new pillar, far enough from the last one
+          lastPillarM_ = stepM_;
+        }
         if (wallFilter_.update(wallOnLeft(), in.nowMs)) ++walls_;
         if (pillars_ >= kPillarsNeeded && walls_ >= kWallsNeeded) nextStepNoStop(in.nowMs);
         else if (stepM_ >= kCountMaxM) fail("Pillars or walls not found");
@@ -111,9 +118,44 @@ class Route {
 
       case DRIVE_TO_END:
         driveStraight(in, dt);
-        if (panelFilter_.update(panelOnRight(), in.nowMs)) ++panels_;
-        if (panels_ >= kPanelsNeeded && frontWallSeen()) finishStep(in.nowMs);
-        else if (stepM_ >= kToEndMaxM) fail("Wall E not found");
+        if (panelFilter_.update(panelOnRight(), in.nowMs)) ++panels_;   // for the page only
+        if (endWallFilter_.update(stepM_ >= kToEndMinM && frontWallClose(), in.nowMs)) {
+          ++walls_;                      // wall E counts as wall 3
+          speed_ = left_ = right_ = 0;   // stop at once, the wall is close
+          finishStep(in.nowMs);
+        } else if (stepM_ >= kToEndMaxM) {
+          fail("Wall E not found");
+        }
+        break;
+
+      case TURN_RIGHT_AT_E:
+        if (turnFinished(in)) finishStep(in.nowMs);
+        break;
+
+      case FORWARD_ALONG_E:
+        driveStraight(in, dt);
+        if (reached(kAlongEM)) finishStep(in.nowMs);
+        break;
+
+      case TURN_LEFT_AT_E:
+        if (turnFinished(in)) finishStep(in.nowMs);
+        break;
+
+      case FIND_E_SIDE:
+        driveStraight(in, dt);
+        if (wallFilter_.update(wallOnLeft(), in.nowMs)) {
+          ++walls_;                      // the side wall of E counts as wall 4
+          nextStepNoStop(in.nowMs);
+        } else if (stepM_ >= kFindESideMaxM) {
+          fail("Side wall of E not found");
+        }
+        break;
+
+      case ALONG_E_SIDE:
+        driveStraight(in, dt);
+        if (wallOnLeft()) lastWallM_ = stepM_;
+        if (stepM_ - lastWallM_ >= kESideGoneM) finishStep(in.nowMs);   // the wall has ended
+        else if (stepM_ >= kESideMaxM) fail("Side wall of E did not end");
         break;
 
       default:
@@ -133,6 +175,9 @@ class Route {
   float totalM() const { return totalM_; }
   float targetHeading() const { return targetHeading_; }
   const char* note() const { return note_; }
+  // How many LiDAR directions see a pillar or a wall right now (for the run log).
+  int pillarHits() const { return hits(90, kPillarFanDeg, kPillarMinCm, kPillarMaxCm); }
+  int wallHits() const { return hits(270, kWallFanDeg, kLidarMinCm, kWallMaxCm); }
 
   static const char* name(Step step) {
     switch (step) {
@@ -144,6 +189,11 @@ class Route {
       case FORWARD_AFTER_C: return "Forward after wall C";
       case TURN_RIGHT: return "Turning right";
       case DRIVE_TO_END: return "Driving to wall E";
+      case TURN_RIGHT_AT_E: return "Turning right at wall E";
+      case FORWARD_ALONG_E: return "Forward along wall E";
+      case TURN_LEFT_AT_E: return "Turning left after wall E";
+      case FIND_E_SIDE: return "Looking for the side wall of E";
+      case ALONG_E_SIDE: return "Along the side wall of E";
       case DONE: return "Finished";
       case FAULT: return "Stopped by safety";
     }
@@ -177,18 +227,17 @@ class Route {
   bool obstacleInFront() const {
     return hits(0, kFrontConeDeg, kLidarMinCm, kObstacleStopCm + kLidarToFrontCm) >= kObstacleMinHits;
   }
-  bool wallOnLeft() const {
-    return hits(270, kWallFanDeg, kLidarMinCm, kWallMaxCm) >= kWallMinHits;
-  }
-  bool pillarOnRight() const {
-    return hits(90, kPillarFanDeg, kPillarMinCm, kPillarMaxCm) >= kPillarMinHits;
-  }
+  bool wallOnLeft() const { return wallHits() >= kWallMinHits; }
+  bool pillarOnRight() const { return pillarHits() >= kPillarMinHits; }
+
   bool panelOnRight() const {
     return hits(90, kPanelFanDeg, kPanelMinCm, kPanelMaxCm) >= kPanelMinHits;
   }
-  bool frontWallSeen() const {
-    return hits(0, kEndWallFanDeg, kLidarMinCm, kEndWallCm) >= kEndWallMinHits;
+  // Wall E: something wide in front, closer than kEndWallStopCm to the rover's front.
+  bool frontWallClose() const {
+    return hits(0, kEndWallFanDeg, kLidarMinCm, kEndWallStopCm + kLidarToFrontCm) >= kEndWallMinHits;
   }
+
 
   // ---- Moving ----
   // Stops at once for an obstacle. It stays stopped until the front is clear for kClearMs.
@@ -275,6 +324,7 @@ class Route {
     nextStep_ = step_ >= kLastStep ? DONE : static_cast<Step>(step_ + 1);
     pausing_ = true;
     pauseStartMs_ = nowMs;
+    blocked_ = false;   // a step can end next to a wall; the next step checks again
   }
 
   // Goes to the next step while still driving, unless this is the last test step.
@@ -298,13 +348,20 @@ class Route {
     step_ = next;
     stepStartMs_ = inToleranceSinceMs_ = headingBadSinceMs_ = nowMs;
     stepM_ = 0;
-    if (next == TURN_LEFT) targetHeading_ = wrap360(startHeading_ - 90.0f);
+    if (next == TURN_LEFT) targetHeading_ = wrap360(startHeading_ - 90.0f); // + 90 Test turns right
     if (next == TURN_RIGHT) targetHeading_ = startHeading_;
     if (next == COUNT_PILLARS) {
       pillarFilter_.reset(nowMs);
       wallFilter_.reset(nowMs);
     }
-    if (next == DRIVE_TO_END) panelFilter_.reset(nowMs);
+    if (next == DRIVE_TO_END) {
+      panelFilter_.reset(nowMs);
+      endWallFilter_.reset(nowMs);
+    }
+    if (next == TURN_RIGHT_AT_E) targetHeading_ = wrap360(startHeading_ + 90.0f);
+    if (next == TURN_LEFT_AT_E) targetHeading_ = startHeading_;
+    if (next == FIND_E_SIDE) wallFilter_.reset(nowMs);
+    if (next == ALONG_E_SIDE) lastWallM_ = 0;
   }
 
   void fail(const char* why) {
@@ -318,12 +375,15 @@ class Route {
   AppearFilter pillarFilter_{kPillarSeenMs, kPillarGoneMs};
   AppearFilter wallFilter_{kWallSeenMs, kWallGoneMs};
   AppearFilter panelFilter_{kPanelSeenMs, kPanelGoneMs};
+  AppearFilter endWallFilter_{kEndWallSeenMs, kEndWallSeenMs};
 
   Step step_ = IDLE, nextStep_ = DONE;
   const char* note_ = "Press Start";
   float startHeading_ = 0, targetHeading_ = 0;
   float speed_ = 0, pull_ = 0, left_ = 0, right_ = 0;
   float stepM_ = 0, totalM_ = 0;
+  float lastPillarM_ = 0;   // where the last pillar was counted, in metres of step 4
+  float lastWallM_ = 0;     // where the side wall of E was last seen, in metres of step 12
   int pillars_ = 0, walls_ = 0, panels_ = 0;
   bool blocked_ = false, pausing_ = false;
   uint32_t lastMs_ = 0, stepStartMs_ = 0, pauseStartMs_ = 0;

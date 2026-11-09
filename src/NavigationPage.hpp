@@ -33,6 +33,9 @@ h2{font-size:15px;margin:0 0 8px;color:var(--muted);font-weight:600}
 button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;color:#fff;cursor:pointer}
 #start{background:#17803d}#stop{background:#c62828}
 #start:disabled{background:#8a96a3;cursor:not-allowed}
+#restart{background:#5b6876;width:100%;min-height:52px;margin-top:16px}
+.check{display:flex;align-items:center;gap:10px;margin-top:12px}
+.check input{width:24px;height:24px}
 .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid var(--line)}
 .row:first-of-type{border-top:0}
 .row span:first-child{color:var(--muted)}
@@ -41,6 +44,7 @@ button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;
 </style></head><body><main>
 <header><h1>Rover 8</h1><span class="tag" id="link">Connecting</span></header>
 <section class="card idle" id="status"><p id="title">Connecting</p><p id="why">Waiting for the box.</p></section>
+<label class="check"><input type="checkbox" id="record" checked>Save this run as CSV</label>
 <div class="buttons"><button id="start" disabled>Start</button><button id="stop">STOP</button></div>
 <p><a href="/log.csv">Download the last run (CSV)</a></p>
 <section class="card"><h2>Checks</h2>
@@ -65,7 +69,9 @@ button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;
  <div class="row"><span>Wheels left / right</span><span id="wheels">-</span></div>
  <div class="row"><span>Heading / target</span><span id="heading">-</span></div>
  <div class="row"><span>Battery</span><span id="battery">-</span></div>
+ <div class="row"><span>CSV of this run</span><span id="logging">-</span></div>
 </section>
+<button id="restart">Restart box</button>
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
@@ -75,8 +81,8 @@ function check(id,ok){say(id,ok?'OK':'NOT OK');$(id).className=ok?'yes':'no';}
 function view(s){
  if(s.blocked)return ['wait','OBSTACLE','Waiting until the path is clear.'];
  if(s.running)return ['ok','DRIVING',s.step];
- if(s.stepNumber===8)return ['ok','FINISHED','Check the real position with your eyes.'];
- if(s.stepNumber===9)return ['bad','STOPPED BY SAFETY',s.note];
+ if(s.stepNumber===13)return ['ok','FINISHED','Check the real position with your eyes.'];
+ if(s.stepNumber===14)return ['bad','STOPPED BY SAFETY',s.note];
  if(!s.roverOk)return ['wait','NOT READY','Start the box first, then restart the rover.'];
  if(!s.imuOk)return ['wait','NOT READY','Waiting for the IMU.'];
  if(!s.lidarOk)return ['wait','NOT READY','No LiDAR data. Check the wiring.'];
@@ -86,8 +92,10 @@ function show(s){
  const v=view(s);
  $('status').className='card '+v[0];say('title',v[1]);say('why',v[2]);say('link','Connected to box');
  $('start').disabled=s.running||!s.roverOk||!s.imuOk||!s.lidarOk;
+ $('record').disabled=s.running;
+ say('logging',s.logging?'Saved':'Not saved (last saved CSV kept)');
  check('roverOk',s.roverOk);check('imuOk',s.imuOk);check('lidarOk',s.lidarOk);
- say('step',s.step);say('pillars',s.pillars+' of 5');say('walls',s.walls+' of 2');say('panels',s.panels);
+ say('step',s.step);say('pillars',s.pillars+' of 5');say('walls',s.walls+' of 4');say('panels',s.panels);
  say('distance',s.distanceM.toFixed(2)+' m');
  say('front',cm(s.frontCm));say('right',cm(s.rightCm));say('back',cm(s.backCm));say('left',cm(s.leftCm));
  say('wheels',s.left.toFixed(2)+' / '+s.right.toFixed(2));
@@ -105,8 +113,14 @@ async function poll(){
  catch(e){offline();}
  finally{clearTimeout(timer);setTimeout(poll,500);}
 }
-$('start').onclick=()=>fetch('/api/start',{method:'POST'});
+try{$('record').checked=localStorage.getItem('record')!=='0';}catch(e){}
+$('record').onchange=()=>{try{localStorage.setItem('record',$('record').checked?'1':'0');}catch(e){}};
+$('start').onclick=()=>fetch('/api/start?log='+($('record').checked?1:0),{method:'POST'});
 $('stop').onclick=()=>fetch('/api/stop',{method:'POST'});
+$('restart').onclick=()=>{
+ if(confirm('Restart the box? The rover stops and the run log (CSV) is deleted. Download it first.'))
+  fetch('/api/restart',{method:'POST'});
+};
 poll();
 </script></main></body></html>
 )RV8NAV";

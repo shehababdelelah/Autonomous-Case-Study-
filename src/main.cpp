@@ -13,9 +13,10 @@
 static constexpr uint32_t kRoutePeriodMs = 50;
 static constexpr uint32_t kPagePeriodMs = 200;
 static constexpr uint32_t kOledPeriodMs = 1000;
-static constexpr uint32_t kLogPeriodMs = 100;
+static constexpr uint32_t kLogPeriodMs = 250;   // the log holds 12.5 minutes; the 12-step route takes about 10
 static constexpr uint32_t kMaxImuAgeMs = 200;
 static constexpr uint32_t kMaxLidarAgeMs = 500;
+static constexpr uint32_t kRestartDelayMs = 1000;   // time to stop the rover before a restart
 
 LidarScan lidar;
 RoverLink rover;
@@ -24,6 +25,7 @@ WEBpage web;
 LCDDisplay oled;
 bool oledReady = false;
 RunLog runLog;
+static bool logThisRun = true;   // chosen on the page before Start
 
 // Reads the IMU in the background, because its calibration wait can take a long time.
 void imuTask(void* parameter) {
@@ -115,6 +117,8 @@ static void addLogRow(const Route::Input& in, uint32_t runMs) {
   row.rightCm = lidar.distanceMm(90) / 10;
   row.pillars = route.pillars();
   row.walls = route.walls();
+  row.pillarHits = route.pillarHits();
+  row.wallHits = route.wallHits();
   runLog.add(row);
 }
 
@@ -123,6 +127,7 @@ static void publishStatus(const Route::Input& in) {
   WEBpage::Status s;
   s.running = route.running();
   s.blocked = route.blocked();
+  s.logging = logThisRun;
   s.roverOk = in.roverOk;
   s.imuOk = in.imuOk;
   s.lidarOk = in.lidarOk;
@@ -148,6 +153,7 @@ static void publishStatus(const Route::Input& in) {
 void loop() {
   static uint32_t lastRouteMs = 0, lastPageMs = 0, lastLogMs = 0, runStartMs = 0;
   static uint32_t lastPackets = 0, lastPacketMs = 0;
+  static uint32_t restartAtMs = 0;   // 0 = no restart asked
 
   lidar.update();   // read every LiDAR byte that is waiting
 
@@ -172,17 +178,25 @@ void loop() {
 
     const auto command = web.takeCommand();
     if (command == WEBpage::Command::Stop) route.stopNow("You pressed Stop");
+
+    if (command == WEBpage::Command::Restart) {
+      route.stopNow("Restarting the box");
+      restartAtMs = nowMs + kRestartDelayMs;
+    }
+    if (restartAtMs != 0 && (int32_t)(nowMs - restartAtMs) >= 0) ESP.restart();
+
     if (command == WEBpage::Command::Start && !route.running()) {
-    route.start(in);
-    runLog.clear();
-    runStartMs = nowMs;
-  }
+      route.start(in);
+      logThisRun = web.logWanted();
+      if (logThisRun) runLog.clear();   // not saving: the last saved log stays
+      runStartMs = nowMs;
+    }
 
     route.update(in);
     rover.setDrive(route.left(), route.right());
-    if (route.running() && nowMs - lastLogMs >= kLogPeriodMs) {
-    lastLogMs = nowMs;
-    addLogRow(in, nowMs - runStartMs);
+    if (logThisRun && route.running() && nowMs - lastLogMs >= kLogPeriodMs) {
+      lastLogMs = nowMs;
+      addLogRow(in, nowMs - runStartMs);
     }
 
     if (nowMs - lastPageMs >= kPagePeriodMs) {
@@ -190,7 +204,8 @@ void loop() {
       publishStatus(in);
     }
   }
-    static uint32_t lastOledMs = 0;
+
+  static uint32_t lastOledMs = 0;
   if (oledReady && nowMs - lastOledMs >= kOledPeriodMs) {
     lastOledMs = nowMs;
     updateOled();

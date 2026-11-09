@@ -8,21 +8,27 @@
 // 1 forward 0.90 m       2 turn left 90
 // 3 forward, no LiDAR    4 count 5 pillars and 2 walls
 // 5 forward after C      6 turn right 90
-// 7 drive to wall E
-constexpr int kLastStep = 2;
+// 7 drive to wall E      8 turn right 90 at wall E
+// 9 forward along E      10 turn left 90
+// 11 find the side wall of E   12 along it until it ends
+
+constexpr int kLastStep = 8;               // next test: new wall E rule (step 7) + right turn at E (step 8)
+
 
 // ---- Driving ----
 constexpr float kDriveSpeed = 0.45f;    // was 0.30f: the weak left side needs more power
-constexpr float kRightTrim  = 0.20f;    // was 0.20f / 0.30f: right gets 0.45 x 0.20 = 0.09
+constexpr float kRightTrim  = 0.18f;       // was 0.20f: outdoors it pulls left
 constexpr float kRampPerSec = 0.30f;    // was 0.20f: start and stop still take 1.5 s
 constexpr float kRealSpeedMps = 0.17f;          // MEASURE: real speed at kDriveSpeed
 constexpr uint32_t kPauseMs = 1000;             // stop time between two steps
 
 // ---- Route distances, in metres ----
-constexpr float kFirstForwardM =  0.90f;          // or 0.98f, see above// was 0.90f, only for this test        // out of the door
-constexpr float kNoLidarForwardM = 0.50f;       // after the left turn, before counting
-constexpr float kAfterPillarsM = 3.00f;         // MEASURE: your map label says 6.66 m
+constexpr float kFirstForwardM =  0.90f;         // or 0.98f, see above was 0.90f, only for this test out of the door
+constexpr float kNoLidarForwardM = 0.10f;        // was 0.50f: pillar 1 is right after the turn
+constexpr float kAfterPillarsM = 2.00f;         // MEASURE: your map label says 6.66 m
 constexpr float kCountMaxM = 40.0f;             // stop if the pillars are not found
+constexpr float kToEndMinM = 20.0f;             // MEASURE: right turn to wall E, minus 3 m (0 = off).
+                                                // 20 for now: in run openSee, step 7 drove 25 m and wall E was not reached yet
 constexpr float kToEndMaxM = 50.0f;             // stop if wall E is not found
 
 // ---- Hold a straight line, values from Robot_8 ----
@@ -36,7 +42,7 @@ constexpr uint32_t kHeadingErrorMs = 1500;      // ...if it lasts this long
 
 // ---- Turn on the spot, values from Robot_8 ----
 constexpr float kTurnPower = 0.50f;             // below this the rover barely turns
-constexpr float kTurnPulseDeg = 35.0f;          // closer than this: short pulses
+constexpr float kTurnPulseDeg = 20.0f;          // optional, was 35.0f: faster turn outdoors
 constexpr uint32_t kTurnPulseOnMs = 100;
 constexpr uint32_t kTurnPulseOffMs = 300;
 constexpr float kTurnToleranceDeg = 4.0f;       // turn is finished inside this error
@@ -63,23 +69,33 @@ constexpr uint32_t kWallSeenMs = 500;
 constexpr uint32_t kWallGoneMs = 1000;
 
 // Pillar on the right
-constexpr int kPillarMinCm = 50;                // MEASURE
-constexpr int kPillarMaxCm = 250;               // MEASURE
+constexpr int kPillarMinCm = 90;           // was 50: a person at 87 cm gave 17 hits
+constexpr int kPillarMaxCm = 180;          // was 250: pillar 1 is at about 120 cm
 constexpr int kPillarFanDeg = 8;
-constexpr int kPillarMinHits = 3;
-constexpr uint32_t kPillarSeenMs = 150;
-constexpr uint32_t kPillarGoneMs = 1000;
+constexpr int kPillarMinHits = 6;          // was 3: one leg of a person gives about 4-5
+constexpr uint32_t kPillarSeenMs = 800;     // was 150: a person walking past is seen for less
+constexpr uint32_t kPillarGoneMs = 2000;    // was 1000: a person close to a pillar joins its hill
+constexpr float kPillarMinGapM = 3.0f;      // NEW: pillars are about 4.6-5.2 m apart
 constexpr int kPillarsNeeded = 5;
 constexpr int kWallsNeeded = 2;
 
-// End of the route: front wall of E, after a panel on the right
-constexpr int kEndWallCm = 150;                 // MEASURE: stop this far from wall E
-constexpr int kEndWallFanDeg = 10;
-constexpr int kEndWallMinHits = 12;
-constexpr int kPanelMinCm = 40;                 // MEASURE
-constexpr int kPanelMaxCm = 150;                // MEASURE
+// End of the first route: wall E in front, no panel needed
+constexpr int kEndWallStopCm = 40;              // stop when wall E is this close to the rover front
+constexpr int kEndWallFanDeg = 20;              // look 20 deg to each side: a wall is wide
+constexpr int kEndWallMinHits = 30;             // 30 of the 41 directions
+constexpr uint32_t kEndWallSeenMs = 300;        // must stay seen this long
+
+// Panel on the right: counted for the page only
+constexpr int kPanelMinCm = 40;
+constexpr int kPanelMaxCm = 150;
 constexpr int kPanelFanDeg = 15;
 constexpr int kPanelMinHits = 5;
 constexpr uint32_t kPanelSeenMs = 300;
 constexpr uint32_t kPanelGoneMs = 1000;
-constexpr int kPanelsNeeded = 1;
+
+// ---- After wall E (steps 8 to 12) ----
+constexpr float kAlongEM = 6.0f;                // MEASURE: step 9, along wall E
+constexpr float kFindESideMaxM = 5.0f;          // step 11: stop if the side wall of E is not found
+constexpr float kESideGoneM = 0.5f;             // step 12: the wall must be gone this far before stopping
+constexpr float kESideMaxM = 40.0f;             // step 12: stop if the side wall never ends
+
