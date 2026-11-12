@@ -81,8 +81,8 @@ function check(id,ok){say(id,ok?'OK':'NOT OK');$(id).className=ok?'yes':'no';}
 function view(s){
  if(s.blocked)return ['wait','OBSTACLE','Waiting until the path is clear.'];
  if(s.running)return ['ok','DRIVING',s.step];
- if(s.stepNumber===13)return ['ok','FINISHED','Check the real position with your eyes.'];
- if(s.stepNumber===14)return ['bad','STOPPED BY SAFETY',s.note];
+ if(s.stepNumber===25)return ['ok','FINISHED','Check the real position with your eyes.'];
+ if(s.stepNumber===26)return ['bad','STOPPED BY SAFETY',s.note];
  if(!s.roverOk)return ['wait','NOT READY','Start the box first, then restart the rover.'];
  if(!s.imuOk)return ['wait','NOT READY','Waiting for the IMU.'];
  if(!s.lidarOk)return ['wait','NOT READY','No LiDAR data. Check the wiring.'];
@@ -95,7 +95,7 @@ function show(s){
  $('record').disabled=s.running;
  say('logging',s.logging?'Saved':'Not saved (last saved CSV kept)');
  check('roverOk',s.roverOk);check('imuOk',s.imuOk);check('lidarOk',s.lidarOk);
- say('step',s.step);say('pillars',s.pillars+' of 5');say('walls',s.walls+' of 4');say('panels',s.panels);
+ say('step',s.step);say('pillars',s.pillars+' of 5');say('walls',s.walls+' of 6');say('panels',s.panels);
  say('distance',s.distanceM.toFixed(2)+' m');
  say('front',cm(s.frontCm));say('right',cm(s.rightCm));say('back',cm(s.backCm));say('left',cm(s.leftCm));
  say('wheels',s.left.toFixed(2)+' / '+s.right.toFixed(2));

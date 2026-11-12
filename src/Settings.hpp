@@ -9,10 +9,16 @@
 // 3 forward, no LiDAR    4 count 5 pillars and 2 walls
 // 5 forward after C      6 turn right 90
 // 7 drive to wall E      8 turn right 90 at wall E
-// 9 forward along E      10 turn left 90
-// 11 find the side wall of E   12 along it until it ends
+// 9 along E to the pillar, +0.8 m      10 turn left 90
+// 11 find the side wall of E           12 along it, then on to the fire hydrant
+// 13 two bench legs, then the panel    14 find the wall of I
+// 15 stop at the small pillar          16 turn right 90
+// 17 forward 1.3 m                     18 turn left 90
+// 19 stop at wall G in front           20 turn right 90
+// 21 along wall K, 2 pillars right     22 past the end of K, wall G left
+// 23 turn right 90                     24 stop at the last pillar: mission finished
 
-constexpr int kLastStep = 10;              // next test: new wall E rule (step 7) + right turn at E (step 8)
+constexpr int kLastStep = 15;              // next test: new wall E rule (step 7) + right turn at E (step 8)
 
 // ---- Driving ----
 constexpr float kDriveSpeed = 0.30f;    // was 0.30f: the weak left side needs more power
@@ -80,6 +86,7 @@ constexpr float kWallGain = 0.3f;               // degrees toward the wall for e
 constexpr float kWallMaxSteerDeg = 15.0f;       // largest angle toward or away from the wall
 constexpr int kWallRayDeg = 30;                 // two rays, 30 deg in front of and behind the left side
 constexpr int kWallRayMaxCm = 300;              // farther readings are not used
+constexpr int kWallRaySpreadCm = 15;            // one ray's readings must agree this well (not a wall end)
 constexpr float kWallMaxAngleDeg = 20.0f;       // wall more than this off the path: a door or a corner
 
 // Pillar on the right
@@ -107,9 +114,84 @@ constexpr int kPanelMinHits = 5;
 constexpr uint32_t kPanelSeenMs = 300;
 constexpr uint32_t kPanelGoneMs = 1000;
 
-// ---- After wall E (steps 8 to 12) ----
-constexpr float kAlongEM = 7.0f;                // MEASURE: step 9, along wall E
-constexpr float kFindESideMaxM = 5.0f;          // step 11: stop if the side wall of E is not found
-constexpr float kESideGoneM = 0.5f;             // step 12: the wall must be gone this far before stopping
-constexpr float kESideMaxM = 40.0f;             // step 12: stop if the side wall never ends
+// ---- Steps 9 to 24 ----
+// All distances in cm are from the LiDAR centre: the Front / Left / Right numbers on the page
+// (front_cm, left_cm, right_cm in the CSV). Your measures are in the comments; most ranges
+// have 15-20 cm margin on each side, because the rover is never in exactly the same place.
+
+// How a small thing (fire hydrant, bench leg, small pillar) is seen
+constexpr int kSmallFanDeg = 8;                 // look 8 deg to each side
+constexpr int kSmallMinHits = 2;                // a bench leg fills only 2-3 directions
+constexpr uint32_t kSmallSeenMs = 200;          // must stay seen this long
+constexpr uint32_t kSmallGoneMs = 500;          // must be gone this long before the next one counts
+constexpr int kFarPillarMinHits = 4;            // steps 9, 21: a pillar 2-2.5 m away fills fewer directions
+constexpr int kFollowWallMaxCm = 120;           // steps 12, 21, 22: the wall we follow counts as there
+
+// Step 9: along wall E until a pillar on the right, then a little more
+constexpr int kEPillarMinCm = 200;              // your measure: about 220
+constexpr int kEPillarMaxCm = 240;
+constexpr float kAlongEMinM = 0.0f;             // look for the pillar only after this far (0 = at once)
+constexpr float kAfterEPillarM = 0.80f;         // then drive this far and stop
+constexpr float kAlongEMaxM = 15.0f;            // safety: stop the run if the pillar is not found
+
+// Step 11: the side wall of E on the left
+constexpr int kESideFindMaxCm = 90;             // your measure: 80
+constexpr float kFindESideMaxM = 5.0f;          // safety: stop the run if the wall is not found
+
+// Step 12: along the side wall of E; after its end, on to the fire hydrant
+constexpr int kESideNearCm = 60;                // follow the wall between these two
+constexpr int kESideFarCm = 80;
+constexpr float kESideGoneM = 0.5f;             // the wall must be gone this far to count as ended
+constexpr int kHydrantMinCm = 115;              // your measure: 130-140
+constexpr int kHydrantMaxCm = 155;
+constexpr float kHydrantMaxM = 6.0f;            // safety: after the wall end (your measure: about 3.5 m)
+constexpr float kESideMaxM = 40.0f;             // safety: stop the run if the wall never ends
+
+// Step 13: two bench legs, then a panel, on the left
+constexpr int kLegMinCm = 105;                  // your measure: 120-130
+constexpr int kLegMaxCm = 145;
+constexpr int kLegsNeeded = 2;
+constexpr int kBenchPanelMinCm = 175;           // your measure: 190-200
+constexpr int kBenchPanelMaxCm = 215;
+constexpr float kBenchMaxM = 15.0f;             // safety
+
+// Step 14: the wall of building I on the left
+constexpr int kIWallMinCm = 245;                // your measure: 260-290
+constexpr int kIWallMaxCm = 305;
+constexpr float kIWallMaxM = 20.0f;             // safety
+
+// Step 15: the small pillar in front, then stop
+constexpr int kSmallPillarStopCm = 70;          // your measure: 50-60; it stops about 10 cm closer than this
+constexpr float kSmallPillarMaxM = 15.0f;       // safety
+
+// Step 17: forward between the turns at the small pillar
+constexpr float kAfterSmallPillarM = 1.30f;     // your measure: 120-140 cm
+
+// Step 19: wall G in front, then stop
+constexpr int kGStopCm = 210;                   // your measure: 180-190; it stops about 20 cm closer than this
+constexpr float kToGMaxM = 30.0f;               // safety
+
+// Step 21: along wall K on the left, count two pillars on the right
+constexpr int kKWallNearCm = 80;                // follow wall K between these two (your measure: 80-90)
+constexpr int kKWallFarCm = 90;
+constexpr int kKPillarMinCm = 225;              // your measure: 240-250
+constexpr int kKPillarMaxCm = 265;
+constexpr int kKPillarsNeeded = 2;
+constexpr float kAlongKMaxM = 30.0f;            // safety
+
+// Step 22: past the end of wall K, wall G on the left, then stop
+constexpr int kGLeftMinCm = 160;                // your measure: about 180
+constexpr int kGLeftMaxCm = 200;
+constexpr float kAfterKWallM = 2.30f;           // stop this far after the end of wall K
+constexpr float kPastKMaxM = 15.0f;             // safety
+
+// Step 24: the last pillar in front, then stop: mission finished
+constexpr int kLastPillarStopCm = 55;           // your measure: about 30 from the rover front = 45 on the page;
+                                                // it stops about 10 cm closer than this
+constexpr float kLastPillarMaxM = 15.0f;        // safety
+
+// Checked when you build: these numbers must fit together.
+static_assert(kEndWallStopCm > kObstacleStopCm, "wall E: the obstacle stop would come first");
+static_assert(kSmallPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 15: the obstacle stop would come first");
+static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 24: the obstacle stop would come first");
 
