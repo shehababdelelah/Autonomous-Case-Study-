@@ -27,8 +27,9 @@ class WEBpage {
   bool logWanted() const { return logWanted_; }   // the CSV choice sent with the last Start
 
  private:
-  String statusJson();
-
+ String statusJson();
+ const char* missionStart();
+ 
   AsyncWebServer server_{80};
   SemaphoreHandle_t mutex_ = nullptr;
   Status status_{};

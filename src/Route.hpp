@@ -87,7 +87,7 @@ class Route {
         break;
 
       case TURN_LEFT:
-        if (turnFinished(in)) finishStep(in.nowMs);
+        if (spinFinished(in)) finishStep(in.nowMs);   // always on the spot: little room at the door
         break;
 
       case FORWARD_NO_LIDAR:
@@ -96,6 +96,7 @@ class Route {
         break;
 
       case COUNT_PILLARS:
+        keepWallDistance(in, wrap360(startHeading_ - 90.0f));
         driveStraight(in, dt);
         if (pillarFilter_.update(pillarOnRight(), in.nowMs) &&
             (pillars_ == 0 || stepM_ - lastPillarM_ >= kPillarMinGapM)) {
@@ -108,14 +109,15 @@ class Route {
         break;
 
       case FORWARD_AFTER_C:
+        keepWallDistance(in, wrap360(startHeading_ - 90.0f));
         driveStraight(in, dt);
         if (reached(kAfterPillarsM)) finishStep(in.nowMs);
         break;
 
       case TURN_RIGHT:
-        if (turnFinished(in)) finishStep(in.nowMs);
-        break;
-
+        if (spinFinished(in)) finishStep(in.nowMs);   // always on the spot: little room at the door        break;
+        break; 
+        
       case DRIVE_TO_END:
         driveStraight(in, dt);
         if (panelFilter_.update(panelOnRight(), in.nowMs)) ++panels_;   // for the page only
@@ -129,7 +131,7 @@ class Route {
         break;
 
       case TURN_RIGHT_AT_E:
-        if (turnFinished(in)) finishStep(in.nowMs);
+        if (spinFinished(in)) finishStep(in.nowMs);   // always on the spot: wall E is close in front
         break;
 
       case FORWARD_ALONG_E:
@@ -138,7 +140,7 @@ class Route {
         break;
 
       case TURN_LEFT_AT_E:
-        if (turnFinished(in)) finishStep(in.nowMs);
+        if (turnFinished(in, dt)) finishStep(in.nowMs);
         break;
 
       case FIND_E_SIDE:
@@ -238,6 +240,39 @@ class Route {
     return hits(0, kEndWallFanDeg, kLidarMinCm, kEndWallStopCm + kLidarToFrontCm) >= kEndWallMinHits;
   }
 
+  
+  // ---- Steps 4 and 5: drive parallel to the wall on the left ----
+  // Average distance in cm around one direction, or 0 if fewer than 3 good readings.
+  float rayCm(int centerDeg) const {
+    float sum = 0;
+    int count = 0;
+    for (int angle = centerDeg - 2; angle <= centerDeg + 2; ++angle) {
+      const int cm = lidar_.distanceMm(angle) / 10;
+      if (cm >= kLidarMinCm && cm <= kWallRayMaxCm) {
+        sum += cm;
+        ++count;
+      }
+    }
+    return count >= 3 ? sum / count : 0;
+  }
+
+  // Two rays, kWallRayDeg in front of and behind the left side, give the wall's direction and
+  // distance. The rover aims along the wall: a little toward it when farther than the middle of
+  // kWallNearCm..kWallFarCm, a little away when closer. With no clear wall (a door, the gap
+  // between B and C) it keeps the last heading.
+  void keepWallDistance(const Input& in, float pathHeading) {
+    const float front = rayCm(270 + kWallRayDeg);
+    const float back = rayCm(270 - kWallRayDeg);
+    if (front <= 0 || back <= 0) return;
+    const float ray = kWallRayDeg * DEG_TO_RAD;
+    const float angle = atanf((front - back) / ((front + back) * tanf(ray)));   // + = pointing away from the wall
+    const float wallHeading = wrap360(in.headingDeg - angle * RAD_TO_DEG);
+    if (fabsf(wrap180(wallHeading - pathHeading)) > kWallMaxAngleDeg) return;   // a door or a corner, not the wall
+    const float wallCm = 2 * cosf(ray) * cosf(angle) * front * back / (front + back);   // like "Left" on the page
+    const float middleCm = (kWallNearCm + kWallFarCm) / 2.0f;
+    const float steer = constrain((wallCm - middleCm) * kWallGain, -kWallMaxSteerDeg, kWallMaxSteerDeg);
+    targetHeading_ = wrap360(wallHeading - steer);   // - = to the left, toward the wall
+  }
 
   // ---- Moving ----
   // Stops at once for an obstacle. It stays stopped until the front is clear for kClearMs.
@@ -290,8 +325,44 @@ class Route {
     return stepM_ + rollM >= targetM;
   }
 
-  // Spins at full power, then uses short pulses near the target.
-  bool turnFinished(const Input& in) {
+  // Chooses the kind of turn: a curve, or the old turn on the spot (kCurveTurns in Settings.hpp).
+  bool turnFinished(const Input& in, float dt) {
+    return kCurveTurns ? curveFinished(in, dt) : spinFinished(in);
+  }
+
+  // Turns in a curve: both sides go forward, the outer side faster. The power ramps up
+  // like straight driving. In the last kTurnSlowDeg the curve opens up, so it does not overshoot.
+  bool curveFinished(const Input& in, float dt) {
+    const float error = wrap180(targetHeading_ - in.headingDeg);   // + = turn right
+    if (in.nowMs - stepStartMs_ > kTurnTimeoutMs) {
+      fail("Turn took too long");
+      return false;
+    }
+    if (fabsf(error) > kTurnWrongWayDeg) {
+      fail("Turn went the wrong way");
+      return false;
+    }
+    if (fabsf(error) <= kTurnToleranceDeg) return true;   // the soft stop comes next
+    if (waitForObstacle(in.nowMs)) {
+      speed_ = left_ = right_ = 0;   // the rover moves in a curve, so it must stop for obstacles
+      return false;
+    }
+
+    speed_ = min(speed_ + kRampPerSec * dt, kTurnSpeed);
+    const float metres = kRealSpeedMps * (speed_ / kDriveSpeed) * dt;
+    stepM_ += metres;
+    totalM_ += metres;
+
+    const float sharpness = kTurnSharpness * min(1.0f, fabsf(error) / kTurnSlowDeg);
+    float turn = copysignf(speed_ * sharpness, error) + pull_;   // + = left side faster
+    turn = constrain(turn, -speed_, speed_);   // the inner side never goes backwards
+    left_ = speed_ + turn;
+    right_ = (speed_ - turn) * kRightTrim;
+    return false;
+  }
+
+  // The old turn: spins on the spot at full power, then uses short pulses near the target.
+  bool spinFinished(const Input& in) {
     const uint32_t nowMs = in.nowMs;
     const float error = wrap180(targetHeading_ - in.headingDeg);   // + = turn right
 
@@ -308,7 +379,6 @@ class Route {
       return nowMs - inToleranceSinceMs_ >= kTurnHoldMs;
     }
     inToleranceSinceMs_ = nowMs;
-
     float power = kTurnPower;
     if (fabsf(error) <= kTurnPulseDeg) {
       const uint32_t phase = (nowMs - stepStartMs_) % (kTurnPulseOnMs + kTurnPulseOffMs);

@@ -1,5 +1,6 @@
 #include "WEBpage.hpp"
 #include "NavigationPage.hpp"
+#include "MissionPage.hpp"
 #include "RunLog.hpp"
 
 void WEBpage::begin() {
@@ -24,6 +25,12 @@ void WEBpage::begin() {
   server_.on("/api/restart", HTTP_POST, [this](AsyncWebServerRequest* r) {
     restartPending_ = true;
     r->send(200, "application/json", "{\"ok\":true}");
+  });
+    server_.on("/mission", HTTP_GET, [](AsyncWebServerRequest* r) {
+    r->send(200, "text/html; charset=utf-8", kMissionPage);
+  });
+  server_.on("/api/mission", HTTP_POST, [this](AsyncWebServerRequest* r) {
+    r->send(200, "application/json", missionStart());
   });
   server_.on("/log.csv", HTTP_GET, [](AsyncWebServerRequest* r) { runLog.send(r); });
   server_.begin();
@@ -52,6 +59,21 @@ WEBpage::Command WEBpage::takeCommand() {
     return Command::Start;
   }
   return Command::None;
+}
+
+// Mission mode: starts the route without a run log, or says why the rover is not ready.
+const char* WEBpage::missionStart() {
+  xSemaphoreTake(mutex_, portMAX_DELAY);
+  const Status s = status_;
+  xSemaphoreGive(mutex_);
+
+  if (s.running) return "{\"ok\":false,\"text\":\"The rover is already driving.\"}";
+  if (!s.roverOk) return "{\"ok\":false,\"text\":\"Not ready: no rover link.\"}";
+  if (!s.imuOk) return "{\"ok\":false,\"text\":\"Not ready: waiting for the IMU.\"}";
+  if (!s.lidarOk) return "{\"ok\":false,\"text\":\"Not ready: no LiDAR data.\"}";
+  logWanted_ = false;     // mission mode saves nothing
+  startPending_ = true;
+  return "{\"ok\":true,\"text\":\"Mission started. You can leave the Wi-Fi now.\"}";
 }
 
 String WEBpage::statusJson() {
