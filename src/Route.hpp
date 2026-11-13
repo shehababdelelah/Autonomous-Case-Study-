@@ -95,7 +95,7 @@ class Route {
         break;
 
       case TURN_LEFT:
-        if (spinFinished(in)) finishStep(in.nowMs);   // always on the spot: little room at the door
+        if (spinFinished(in, dt)) finishStep(in.nowMs);   // always on the spot: little room at the door
         break;
 
       case FORWARD_NO_LIDAR:
@@ -123,7 +123,7 @@ class Route {
         break;
 
       case TURN_RIGHT:
-        if (spinFinished(in)) finishStep(in.nowMs);   // always on the spot
+        if (spinFinished(in, dt)) finishStep(in.nowMs);   // always on the spot
         break;
 
       case DRIVE_TO_END:
@@ -139,7 +139,7 @@ class Route {
         break;
 
       case TURN_RIGHT_AT_E:
-        if (spinFinished(in)) finishStep(in.nowMs);   // always on the spot: wall E is close in front
+        if (spinFinished(in, dt)) finishStep(in.nowMs);   // always on the spot: wall E is close in front
         break;
 
       case FORWARD_ALONG_E: {   // 9: along wall E until a pillar on the right, then kAfterEPillarM more
@@ -480,7 +480,7 @@ class Route {
 
   // Chooses the kind of turn: a curve, or the old turn on the spot (kCurveTurns in Settings.hpp).
   bool turnFinished(const Input& in, float dt) {
-    return kCurveTurns ? curveFinished(in, dt) : spinFinished(in);
+    return kCurveTurns ? curveFinished(in, dt) : spinFinished(in, dt);
   }
 
   // Turns in a curve: both sides go forward, the outer side faster. The power ramps up
@@ -515,7 +515,9 @@ class Route {
   }
 
   // The old turn: spins on the spot at full power, then uses short pulses near the target.
-  bool spinFinished(const Input& in) {
+  // The power moves to the wanted power in a straight line, kTurnRampPerSec per second, so the
+  // gearbox gets no hard kick when it starts, stops or changes direction.
+  bool spinFinished(const Input& in, float dt) {
     const uint32_t nowMs = in.nowMs;
     const float error = wrap180(targetHeading_ - in.headingDeg);   // + = turn right
 
@@ -527,19 +529,22 @@ class Route {
       fail("Turn went the wrong way");
       return false;
     }
-    if (fabsf(error) <= kTurnToleranceDeg) {
-      left_ = right_ = 0;
-      return nowMs - inToleranceSinceMs_ >= kTurnHoldMs;
+    const bool inside = fabsf(error) <= kTurnToleranceDeg;
+    float wanted = 0;                                              // + = turn right
+    if (!inside) {
+      inToleranceSinceMs_ = nowMs;
+      wanted = kTurnPower;
+      if (fabsf(error) <= kTurnPulseDeg) {
+        const uint32_t phase = (nowMs - stepStartMs_) % (kTurnPulseOnMs + kTurnPulseOffMs);
+        if (phase >= kTurnPulseOnMs) wanted = 0;
+      }
+      if (error < 0) wanted = -wanted;
     }
-    inToleranceSinceMs_ = nowMs;
-    float power = kTurnPower;
-    if (fabsf(error) <= kTurnPulseDeg) {
-      const uint32_t phase = (nowMs - stepStartMs_) % (kTurnPulseOnMs + kTurnPulseOffMs);
-      if (phase >= kTurnPulseOnMs) power = 0;
-    }
-    left_ = error > 0 ? power : -power;
-    right_ = -left_;
-    return false;
+    const float change = kTurnRampPerSec * dt;
+    spin_ = constrain(wanted, spin_ - change, spin_ + change);   // one small step toward wanted
+    left_ = spin_;
+    right_ = -spin_;
+    return inside && spin_ == 0 && nowMs - inToleranceSinceMs_ >= kTurnHoldMs;
   }
 
   // ---- Changing steps ----
@@ -584,6 +589,7 @@ class Route {
     step_ = next;
     stepStartMs_ = inToleranceSinceMs_ = headingBadSinceMs_ = nowMs;
     stepM_ = 0;
+    spin_ = 0;   // every turn starts from standing still
 
     // Every step starts fresh: nothing seen yet.
     found_ = 0;
@@ -630,6 +636,7 @@ class Route {
   const char* note_ = "Press Start";
   float startHeading_ = 0, targetHeading_ = 0;
   float speed_ = 0, pull_ = 0, left_ = 0, right_ = 0;
+  float spin_ = 0;   // turn power now, + = turn right; it ramps (spinFinished)
   float stepM_ = 0, totalM_ = 0;
   float lastPillarM_ = 0;   // where the last pillar was counted, in metres of step 4
   float lastWallM_ = 0;     // where the wall we follow was last seen, in metres of this step (12, 22)

@@ -48,11 +48,12 @@ constexpr uint32_t kHeadingErrorMs = 1500;      // ...if it lasts this long
 // ---- Turn on the spot, values from Robot_8 ----
 constexpr float kTurnPower = 0.50f;             // below this the rover barely turns
 constexpr float kTurnPulseDeg = 15.0f;          // 20 optional, was 35.0f: faster turn outdoors
-constexpr uint32_t kTurnPulseOnMs = 200;        // was 100: a longer push breaks the friction
+constexpr uint32_t kTurnPulseOnMs = 300;        // was 100: a longer push breaks the friction
+constexpr float kTurnRampPerSec = 2.5f;         // turn power 0 to 0.5 in 0.2 s (0.5 / 2.5)
 constexpr uint32_t kTurnPulseOffMs = 200;       // was 300: shorter wait between pushes
 constexpr float kTurnToleranceDeg = 4.0f;       // turn is finished inside this error
 constexpr uint32_t kTurnHoldMs = 300;           // ...for this long
-constexpr uint32_t kTurnTimeoutMs = 20000;
+constexpr uint32_t kTurnTimeoutMs = 10000;
 constexpr float kTurnWrongWayDeg = 115.0f;      // error got bigger: wrong direction
 
 // Turn as a curve (false = the old turn on the spot above)
@@ -200,10 +201,10 @@ struct TestGroup {
   float facingDeg;
 };
 constexpr TestGroup kTestGroups[] = {
-  {"OpenSee urban canyon", 1, 8, 0},           // at the door
-  {"Urban canyon to building I", 9, 15, 90},   // at wall E, facing along it
-  {"Building I to building K", 16, 21, 0},     // in front of the small pillar
-  {"To the end point", 22, 24, 90},            // next to wall K, facing along it
+  {"B building to E building", 1, 8, 0},                // at the door
+  {"E building to I building", 9, 15, 90},              // at wall E, facing along it
+  {"I building to K building", 16, 21, 0},              // in front of the small pillar
+  {"K building to H building, end of mission", 22, 24, 90},  // next to wall K, facing along it
 };
 constexpr int kTestGroupCount = sizeof(kTestGroups) / sizeof(kTestGroups[0]);
 
@@ -211,4 +212,5 @@ constexpr int kTestGroupCount = sizeof(kTestGroups) / sizeof(kTestGroups[0]);
 static_assert(kEndWallStopCm > kObstacleStopCm, "wall E: the obstacle stop would come first");
 static_assert(kSmallPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 15: the obstacle stop would come first");
 static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 24: the obstacle stop would come first");
+static_assert(kTurnPulseOnMs > 1000.0f * kTurnPower / kTurnRampPerSec, "a turn push must reach full power: make kTurnPulseOnMs longer or kTurnRampPerSec bigger");
 
