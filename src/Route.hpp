@@ -52,17 +52,23 @@ class Route {
 
   explicit Route(const LidarScan& lidar) : lidar_(lidar) {}
 
-  void start(const Input& in) {
-    startHeading_ = targetHeading_ = in.headingDeg;
+  // Starts at firstStep and stops after lastStep (see the test groups in Settings.hpp).
+  // facingDeg: the way the rover faces now, compared with the door direction (0 for step 1).
+  // Every turn is counted from the door direction, so the turns stay right in a test group.
+  void start(const Input& in, int firstStep = FORWARD_OUT, int lastStep = kLastStep, float facingDeg = 0) {
+    startHeading_ = wrap360(in.headingDeg - facingDeg);
+    targetHeading_ = in.headingDeg;
+    lastStep_ = lastStep;
     pillars_ = walls_ = panels_ = 0;
     speed_ = pull_ = totalM_ = 0;
-    blocked_ = pausing_ = false;
+    blocked_ = pausing_ = stepEnded_ = false;
     lastMs_ = in.nowMs;
-    enterStep(FORWARD_OUT, in.nowMs);
+    enterStep(static_cast<Step>(firstStep), in.nowMs);
     note_ = "Driving";
   }
 
   void stopNow(const char* why) {
+    if (running() && !pausing_) noteStepEnd(lastMs_, why);
     step_ = IDLE;
     note_ = why;
     speed_ = left_ = right_ = 0;
@@ -283,6 +289,17 @@ class Route {
   float totalM() const { return totalM_; }
   float targetHeading() const { return targetHeading_; }
   const char* note() const { return note_; }
+
+  // True once after a step has ended: which step, how long it worked (the pause after it is
+  // not counted) and "done" or why the run stopped. main.cpp saves it in the step-times CSV.
+  bool takeEndedStep(Step& step, uint32_t& ms, const char*& result) {
+    if (!stepEnded_) return false;
+    stepEnded_ = false;
+    step = endedStep_;
+    ms = endedMs_;
+    result = endedResult_;
+    return true;
+  }
   // How many LiDAR directions see a pillar or a wall right now (for the run log).
   int pillarHits() const { return hits(90, kPillarFanDeg, kPillarMinCm, kPillarMaxCm); }
   int wallHits() const { return hits(270, kWallFanDeg, kLidarMinCm, kWallMaxCm); }
@@ -527,7 +544,8 @@ class Route {
 
   // ---- Changing steps ----
   void finishStep(uint32_t nowMs) {
-    nextStep_ = step_ >= kLastStep ? DONE : static_cast<Step>(step_ + 1);
+    noteStepEnd(nowMs, "done");
+    nextStep_ = step_ >= lastStep_ ? DONE : static_cast<Step>(step_ + 1);
     pausing_ = true;
     pauseStartMs_ = nowMs;
     blocked_ = false;   // a step can end next to a wall; the next step checks again
@@ -535,8 +553,20 @@ class Route {
 
   // Goes to the next step while still driving, unless this is the last test step.
   void nextStepNoStop(uint32_t nowMs) {
-    if (step_ >= kLastStep) finishStep(nowMs);
-    else enterStep(static_cast<Step>(step_ + 1), nowMs);
+    if (step_ >= lastStep_) {
+      finishStep(nowMs);
+    } else {
+      noteStepEnd(nowMs, "done");
+      enterStep(static_cast<Step>(step_ + 1), nowMs);
+    }
+  }
+
+  // Remembers the step that just ended, for takeEndedStep().
+  void noteStepEnd(uint32_t nowMs, const char* result) {
+    endedStep_ = step_;
+    endedMs_ = nowMs - stepStartMs_;
+    endedResult_ = result;
+    stepEnded_ = true;
   }
 
   // Slows to zero, waits kPauseMs, then starts the next step.
@@ -577,6 +607,7 @@ class Route {
   }
 
   void fail(const char* why) {
+    if (!pausing_) noteStepEnd(lastMs_, why);
     step_ = FAULT;
     note_ = why;
     speed_ = left_ = right_ = 0;
@@ -591,6 +622,11 @@ class Route {
   AppearFilter smallFilter_{kSmallSeenMs, kSmallGoneMs};
 
   Step step_ = IDLE, nextStep_ = DONE;
+  int lastStep_ = kLastStep;   // the run stops after this step (kLastStep, or a test group's last)
+  Step endedStep_ = IDLE;      // the step that just ended, for takeEndedStep()
+  uint32_t endedMs_ = 0;
+  const char* endedResult_ = "";
+  bool stepEnded_ = false;
   const char* note_ = "Press Start";
   float startHeading_ = 0, targetHeading_ = 0;
   float speed_ = 0, pull_ = 0, left_ = 0, right_ = 0;

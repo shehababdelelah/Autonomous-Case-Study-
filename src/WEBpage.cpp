@@ -2,6 +2,7 @@
 #include "NavigationPage.hpp"
 #include "MissionPage.hpp"
 #include "RunLog.hpp"
+#include "Settings.hpp"
 
 void WEBpage::begin() {
   mutex_ = xSemaphoreCreateMutex();
@@ -15,6 +16,9 @@ void WEBpage::begin() {
   server_.on("/api/start", HTTP_POST, [this](AsyncWebServerRequest* r) {
     // /api/start?log=0 means: do not save this run. Without "log", it is saved as before.
     logWanted_ = !(r->hasParam("log") && r->getParam("log")->value() == "0");
+    // /api/start?group=2 drives only test group 2 (Settings.hpp). Without "group": the whole route.
+    group_ = r->hasParam("group") ? r->getParam("group")->value().toInt() : 0;
+    if (group_ < 0 || group_ > kTestGroupCount) group_ = 0;
     startPending_ = true;
     r->send(200, "application/json", "{\"ok\":true}");
   });
@@ -33,6 +37,18 @@ void WEBpage::begin() {
     r->send(200, "application/json", missionStart());
   });
   server_.on("/log.csv", HTTP_GET, [](AsyncWebServerRequest* r) { runLog.send(r); });
+  server_.on("/steps.csv", HTTP_GET, [](AsyncWebServerRequest* r) { runLog.sendSteps(r); });
+  // The test groups from Settings.hpp, for the buttons on the page.
+  server_.on("/api/groups", HTTP_GET, [](AsyncWebServerRequest* r) {
+    String json = "[";
+    for (int i = 0; i < kTestGroupCount; ++i) {
+      char item[112];
+      snprintf(item, sizeof(item), "%s{\"name\":\"%s\",\"first\":%d,\"last\":%d}", i ? "," : "",
+               kTestGroups[i].name, kTestGroups[i].firstStep, kTestGroups[i].lastStep);
+      json += item;
+    }
+    r->send(200, "application/json", json + "]");
+  });
   server_.begin();
 }
 
@@ -72,6 +88,7 @@ const char* WEBpage::missionStart() {
   if (!s.imuOk) return "{\"ok\":false,\"text\":\"Not ready: waiting for the IMU.\"}";
   if (!s.lidarOk) return "{\"ok\":false,\"text\":\"Not ready: no LiDAR data.\"}";
   logWanted_ = false;     // mission mode saves nothing
+  group_ = 0;             // and drives the whole route
   startPending_ = true;
   return "{\"ok\":true,\"text\":\"Mission started. You can leave the Wi-Fi now.\"}";
 }
@@ -84,11 +101,11 @@ String WEBpage::statusJson() {
   char json[420];
   snprintf(json, sizeof(json),
            "{\"running\":%d,\"blocked\":%d,\"logging\":%d,\"roverOk\":%d,\"imuOk\":%d,\"lidarOk\":%d,"   // line 62
-           "\"stepNumber\":%d,\"step\":\"%s\",\"note\":\"%s\",\"left\":%.2f,\"right\":%.2f,"
+           "\"stepNumber\":%d,\"group\":%d,\"step\":\"%s\",\"note\":\"%s\",\"left\":%.2f,\"right\":%.2f,"
            "\"distanceM\":%.2f,\"voltage\":%.1f,\"pillars\":%d,\"walls\":%d,\"panels\":%d,"
            "\"headingDeg\":%.1f,\"targetDeg\":%.1f,\"frontCm\":%d,\"rightCm\":%d,"
            "\"backCm\":%d,\"leftCm\":%d}",
-           s.running, s.blocked, s.logging, s.roverOk, s.imuOk, s.lidarOk, s.stepNumber, s.step, s.note,   // line 67
+           s.running, s.blocked, s.logging, s.roverOk, s.imuOk, s.lidarOk, s.stepNumber, s.group, s.step, s.note,   // line 67
            s.left, s.right, s.distanceM, s.voltage, s.pillars, s.walls, s.panels,
            s.headingDeg, s.targetDeg, s.frontCm, s.rightCm, s.backCm, s.leftCm);
   return String(json);

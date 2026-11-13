@@ -30,7 +30,7 @@ constexpr uint32_t kPauseMs = 1000;             // stop time between two steps
 // ---- Route distances, in metres ----
 constexpr float kFirstForwardM =  0.90f;         // or 0.98f, see above was 0.90f, only for this test out of the door
 constexpr float kNoLidarForwardM = 0.10f;        // was 0.50f: pillar 1 is right after the turn
-constexpr float kAfterPillarsM = 1.50f;         // MEASURE: your map label says 6.66 m
+constexpr float kAfterPillarsM = 1.20f;         // MEASURE: your map label says 6.66 m
 constexpr float kCountMaxM = 40.0f;             // stop if the pillars are not found
 constexpr float kToEndMinM = 20.0f;             // MEASURE: right turn to wall E, minus 3 m (0 = off).
                                                 // 20 for now: in run openSee, step 7 drove 25 m and wall E was not reached yet
@@ -101,7 +101,7 @@ constexpr int kPillarsNeeded = 5;
 constexpr int kWallsNeeded = 2;
 
 // End of the first route: wall E in front, no panel needed
-constexpr int kEndWallStopCm = 40;              // stop when wall E is this close to the rover front
+constexpr int kEndWallStopCm = 80;              // stop when wall E is this close to the rover front
 constexpr int kEndWallFanDeg = 20;              // look 20 deg to each side: a wall is wide
 constexpr int kEndWallMinHits = 30;             // 30 of the 41 directions
 constexpr uint32_t kEndWallSeenMs = 300;        // must stay seen this long
@@ -189,6 +189,23 @@ constexpr float kPastKMaxM = 15.0f;             // safety
 constexpr int kLastPillarStopCm = 55;           // your measure: about 30 from the rover front = 45 on the page;
                                                 // it stops about 10 cm closer than this
 constexpr float kLastPillarMaxM = 15.0f;        // safety
+
+// ---- Test groups: one button each on the test page ----
+// The rover drives only these steps and then stops. Put it where the first step starts,
+// facing the way that step drives. facingDeg = that way, compared with the door direction:
+// 0 = the same way as at the door, 90 = 90 deg to the right of it.
+struct TestGroup {
+  const char* name;
+  int firstStep, lastStep;
+  float facingDeg;
+};
+constexpr TestGroup kTestGroups[] = {
+  {"OpenSee urban canyon", 1, 8, 0},           // at the door
+  {"Urban canyon to building I", 9, 15, 90},   // at wall E, facing along it
+  {"Building I to building K", 16, 21, 0},     // in front of the small pillar
+  {"To the end point", 22, 24, 90},            // next to wall K, facing along it
+};
+constexpr int kTestGroupCount = sizeof(kTestGroups) / sizeof(kTestGroups[0]);
 
 // Checked when you build: these numbers must fit together.
 static_assert(kEndWallStopCm > kObstacleStopCm, "wall E: the obstacle stop would come first");

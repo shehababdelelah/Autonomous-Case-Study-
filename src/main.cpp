@@ -26,6 +26,7 @@ LCDDisplay oled;
 bool oledReady = false;
 RunLog runLog;
 static bool logThisRun = true;   // chosen on the page before Start
+static int runGroup = 0;         // 0 = the whole route, 1-4 = a test group (Settings.hpp)
 
 // Reads the IMU in the background, because its calibration wait can take a long time.
 void imuTask(void* parameter) {
@@ -132,6 +133,7 @@ static void publishStatus(const Route::Input& in) {
   s.imuOk = in.imuOk;
   s.lidarOk = in.lidarOk;
   s.stepNumber = route.step();
+  s.group = runGroup;
   snprintf(s.step, sizeof(s.step), "%s", Route::name(route.step()));
   snprintf(s.note, sizeof(s.note), "%s", route.note());
   s.left = route.left();
@@ -186,13 +188,26 @@ void loop() {
     if (restartAtMs != 0 && (int32_t)(nowMs - restartAtMs) >= 0) ESP.restart();
 
     if (command == WEBpage::Command::Start && !route.running()) {
-      route.start(in);
+      runGroup = web.groupWanted();
+      if (runGroup == 0) {
+        route.start(in);   // the whole route, steps 1 to kLastStep
+      } else {
+        const TestGroup& group = kTestGroups[runGroup - 1];
+        route.start(in, group.firstStep, group.lastStep, group.facingDeg);
+      }
       logThisRun = web.logWanted();
-      if (logThisRun) runLog.clear();   // not saving: the last saved log stays
+      if (logThisRun) runLog.clear(runGroup);   // not saving: the last saved log stays
       runStartMs = nowMs;
     }
 
     route.update(in);
+    // A step has ended: save its time (turns too) in steps.csv.
+    Route::Step endedStep;
+    uint32_t endedMs;
+    const char* endedResult;
+    if (route.takeEndedStep(endedStep, endedMs, endedResult) && logThisRun) {
+      runLog.addStep({static_cast<uint8_t>(endedStep), endedMs, Route::name(endedStep), endedResult});
+    }
     rover.setDrive(route.left(), route.right());
     if (logThisRun && route.running() && nowMs - lastLogMs >= kLogPeriodMs) {
       lastLogMs = nowMs;

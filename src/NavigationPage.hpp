@@ -34,6 +34,9 @@ button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;
 #start{background:#17803d}#stop{background:#c62828}
 #start:disabled{background:#8a96a3;cursor:not-allowed}
 #restart{background:#5b6876;width:100%;min-height:52px;margin-top:16px}
+.group{width:100%;min-height:56px;margin-top:8px;background:#34506b;text-align:left;padding:0 14px}
+.group:disabled{background:#8a96a3;cursor:not-allowed}
+.hint{margin:0;color:var(--muted);font-size:15px}
 .check{display:flex;align-items:center;gap:10px;margin-top:12px}
 .check input{width:24px;height:24px}
 .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid var(--line)}
@@ -46,13 +49,18 @@ button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;
 <section class="card idle" id="status"><p id="title">Connecting</p><p id="why">Waiting for the box.</p></section>
 <label class="check"><input type="checkbox" id="record" checked>Save this run as CSV</label>
 <div class="buttons"><button id="start" disabled>Start</button><button id="stop">STOP</button></div>
-<p><a href="/log.csv">Download the last run (CSV)</a> &middot; <a href="/mission">Mission mode</a></p>
+<p><a href="/log.csv">Download the last run (CSV)</a> &middot; <a href="/steps.csv">Step times (CSV)</a> &middot; <a href="/mission">Mission mode</a></p>
+<section class="card"><h2>Test one group of steps (always saved as CSV)</h2>
+ <p class="hint">Put the rover where the first step of the group starts, facing the way that step drives.</p>
+ <div id="groups"><p class="hint">Loading the groups...</p></div>
+</section>
 <section class="card"><h2>Checks</h2>
  <div class="row"><span>Rover link</span><span id="roverOk">-</span></div>
  <div class="row"><span>IMU</span><span id="imuOk">-</span></div>
  <div class="row"><span>LiDAR</span><span id="lidarOk">-</span></div>
 </section>
 <section class="card"><h2>Route</h2>
+ <div class="row"><span>Test</span><span id="group">-</span></div>
  <div class="row"><span>Step</span><span id="step">-</span></div>
  <div class="row"><span>Pillars</span><span id="pillars">-</span></div>
  <div class="row"><span>Walls</span><span id="walls">-</span></div>
@@ -78,6 +86,19 @@ const $=id=>document.getElementById(id);
 const say=(id,text)=>{$(id).textContent=text;};
 const cm=v=>v>0?v+' cm':'No reading';
 function check(id,ok){say(id,ok?'OK':'NOT OK');$(id).className=ok?'yes':'no';}
+let groups=[];
+const groupText=g=>'Steps '+g.first+'-'+g.last+': '+g.name;
+async function loadGroups(){
+ try{groups=await (await fetch('/api/groups',{cache:'no-store'})).json();}
+ catch(e){setTimeout(loadGroups,2000);return;}
+ $('groups').textContent='';
+ groups.forEach((g,i)=>{
+  const b=document.createElement('button');
+  b.className='group';b.textContent=groupText(g);b.disabled=$('start').disabled;
+  b.onclick=()=>fetch('/api/start?log=1&group='+(i+1),{method:'POST'});
+  $('groups').appendChild(b);
+ });
+}
 function view(s){
  if(s.blocked)return ['wait','OBSTACLE','Waiting until the path is clear.'];
  if(s.running)return ['ok','DRIVING',s.step];
@@ -93,6 +114,8 @@ function show(s){
  $('status').className='card '+v[0];say('title',v[1]);say('why',v[2]);say('link','Connected to box');
  $('start').disabled=s.running||!s.roverOk||!s.imuOk||!s.lidarOk;
  $('record').disabled=s.running;
+ document.querySelectorAll('.group').forEach(b=>{b.disabled=$('start').disabled;});
+ say('group',s.group>0&&groups[s.group-1]?groupText(groups[s.group-1]):'Whole route');
  say('logging',s.logging?'Saved':'Not saved (last saved CSV kept)');
  check('roverOk',s.roverOk);check('imuOk',s.imuOk);check('lidarOk',s.lidarOk);
  say('step',s.step);say('pillars',s.pillars+' of 5');say('walls',s.walls+' of 6');say('panels',s.panels);
@@ -121,6 +144,7 @@ $('restart').onclick=()=>{
  if(confirm('Restart the box? The rover stops and the run log (CSV) is deleted. Download it first.'))
   fetch('/api/restart',{method:'POST'});
 };
+loadGroups();
 poll();
 </script></main></body></html>
 )RV8NAV";

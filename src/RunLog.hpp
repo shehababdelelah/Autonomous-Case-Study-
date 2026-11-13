@@ -5,7 +5,8 @@
 #include <new>
 
 // Records one row every kLogPeriodMs (main.cpp) of a run, in RAM (no flash writes while driving).
-// Download it at http://192.168.18.1/log.csv after the run.
+// Download it at http://192.168.18.1/log.csv after the run, and the time of every step
+// (turns too) at http://192.168.18.1/steps.csv.
 // Start clears it, and a restart of the box loses it.
 class RunLog {
  public:
@@ -20,9 +21,28 @@ class RunLog {
   };
   static constexpr int kMaxRows = 3000;   // 12.5 minutes at one row every 250 ms
 
+  // One line of steps.csv: a step that ended, how long it took, and how it ended.
+  struct StepTime {
+    uint8_t step;
+    uint32_t ms;          // time the step worked, without the pause after it
+    const char* name;     // Route::name()
+    const char* result;   // "done", or why the run stopped
+  };
+  static constexpr int kMaxSteps = 40;
+
   // About 72 KB. If memory is short, the log stays off and the rover still works.
   void begin() { rows_ = new (std::nothrow) Row[kMaxRows]; }
-  void clear() { count_ = 0; }
+  // group: 0 = the whole route, 1-4 = a test group (only used in the file names).
+  void clear(int group = 0) {
+    count_ = 0;
+    steps_ = 0;
+    group_ = group;
+  }
+  void addStep(const StepTime& step) {
+    if (steps_ >= kMaxSteps) return;
+    stepTimes_[steps_] = step;
+    steps_ = steps_ + 1;
+  }
   void add(const Row& row) {
     if (!rows_ || count_ >= kMaxRows) return;
     rows_[count_] = row;
@@ -37,11 +57,32 @@ class RunLog {
         "text/csv", [this, cursor](uint8_t* out, size_t maxLen, size_t) -> size_t {
           return fill(*cursor, out, maxLen);
         });
-    response->addHeader("Content-Disposition", "attachment; filename=\"run.csv\"");
+    response->addHeader("Content-Disposition", fileName("run"));
+    request->send(response);
+  }
+
+  // steps.csv: one line per step. Small, so it is sent in one piece.
+  void sendSteps(AsyncWebServerRequest* request) {
+    String text = "step,name,seconds,result\n";
+    for (int i = 0; i < steps_; ++i) {
+      const StepTime& s = stepTimes_[i];
+      char line[112];
+      snprintf(line, sizeof(line), "%u,\"%s\",%.1f,\"%s\"\n", s.step, s.name, s.ms / 1000.0f, s.result);
+      text += line;
+    }
+    AsyncWebServerResponse* response = request->beginResponse(200, "text/csv", text);
+    response->addHeader("Content-Disposition", fileName("steps"));
     request->send(response);
   }
 
  private:
+  // run.csv / steps.csv for the whole route, run-group2.csv / steps-group2.csv for test group 2.
+  String fileName(const char* kind) const {
+    String name = kind;
+    if (group_ > 0) name += "-group" + String(group_);
+    return "attachment; filename=\"" + name + ".csv\"";
+  }
+
   struct Cursor {
     int rows = 0, next = -1;   // -1 = the header line comes first
     char line[160];            // the header is the longest line, 137 characters
@@ -86,6 +127,9 @@ class RunLog {
 
   Row* rows_ = nullptr;
   volatile int count_ = 0;
+  StepTime stepTimes_[kMaxSteps];
+  volatile int steps_ = 0;
+  int group_ = 0;
 };
 
 extern RunLog runLog;
