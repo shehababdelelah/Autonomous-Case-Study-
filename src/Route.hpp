@@ -142,12 +142,16 @@ class Route {
         if (spinFinished(in, dt)) finishStep(in.nowMs);   // always on the spot: wall E is close in front
         break;
 
-      case FORWARD_ALONG_E: {   // 9: along wall E until a pillar on the right, then kAfterEPillarM more
+       case FORWARD_ALONG_E: {   // 9: along wall E until a pillar on the right, then kAfterEPillarM more
         driveStraight(in, dt);
+        if (wallLeft(kLidarMinCm, kFollowWallMaxCm)) lastWallM_ = stepM_;   // wall E is still beside the rover
         const bool pillar = pillarFilter_.update(stepM_ >= kAlongEMinM && farPillarRight(kEPillarMinCm, kEPillarMaxCm), in.nowMs);
         if (pillar && foundAtM_ < 0) foundAtM_ = stepM_;   // remember where the pillar was
+        // Spare rule: the pillar was missed, but wall E has ended on the left.
+        const bool wallEnded = foundAtM_ < 0 && lastWallM_ >= kAlongEMinM && reached(lastWallM_ + kAfterEWallEndM);
         if (foundAtM_ >= 0 && reached(foundAtM_ + kAfterEPillarM)) finishStep(in.nowMs);
-        else if (foundAtM_ < 0 && stepM_ >= kAlongEMaxM) fail("Pillar along E not found");
+        else if (wallEnded) finishStep(in.nowMs);
+        else if (stepM_ >= kAlongEMaxM) fail("Pillar along E not found");
         break;
       }
 

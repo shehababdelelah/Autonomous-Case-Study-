@@ -106,6 +106,7 @@ constexpr int kEndWallStopCm = 80;              // stop when wall E is this clos
 constexpr int kEndWallFanDeg = 20;              // look 20 deg to each side: a wall is wide
 constexpr int kEndWallMinHits = 30;             // 30 of the 41 directions
 constexpr uint32_t kEndWallSeenMs = 300;        // must stay seen this long
+constexpr float kAfterEWallEndM = 0.40f;        // spare rule: stop this far after the end of wall E
 
 // Panel on the right: counted for the page only
 constexpr int kPanelMinCm = 40;
