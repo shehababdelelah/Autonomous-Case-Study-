@@ -163,7 +163,7 @@ constexpr float kIWallMinM = 6.0f;              // NEW: look only this far after
 constexpr float kIWallMaxM = 20.0f;             // safety
 
 // Step 15: the small pillar in front, then stop
-constexpr int kSmallPillarStopCm = 70;          // your measure: 50-60; it stops about 10 cm closer than this
+constexpr int kSmallPillarStopCm = 80;          // your measure: 50-60; it stops about 10 cm closer than this
 constexpr float kSmallPillarMaxM = 15.0f;       // safety
 
 // Step 17: forward between the turns at the small pillar
