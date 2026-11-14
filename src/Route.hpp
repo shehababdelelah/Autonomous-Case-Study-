@@ -196,7 +196,7 @@ class Route {
 
       case FIND_I_WALL:   // 14: the wall of building I on the left
         driveStraight(in, dt);
-        if (wallFilter_.update(wallLeft(kIWallMinCm, kIWallMaxCm), in.nowMs)) {
+        if (wallFilter_.update(stepM_ >= kIWallMinM && wallLeft(kIWallMinCm, kIWallMaxCm), in.nowMs)) {
           ++walls_;
           nextStepNoStop(in.nowMs);
         } else if (stepM_ >= kIWallMaxM) {

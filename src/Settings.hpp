@@ -41,13 +41,13 @@ constexpr float kHeadingGain = 0.05f;           // wheel command per degree of e
 constexpr float kHeadingDeadDeg = 1.0f;         // ignore errors smaller than this
 constexpr float kMaxCorrection = 0.18f;         // largest steering command
 constexpr float kPullGain = 0.01f;              // was 0.004f: learns a steady pull to one side faster
-constexpr float kMaxPull = 0.10f;               // was 0.03f: this rover needed 0.08 (CSV drifitingleft)
+constexpr float kMaxPull = 0.15f;               // was 0.10f: the ramp needed about 0.13 (run-group2)
 constexpr float kMaxHeadingErrorDeg = 25.0f;    // lost the line: stop the run
 constexpr uint32_t kHeadingErrorMs = 1500;      // ...if it lasts this long
 
 // ---- Turn on the spot, values from Robot_8 ----
 constexpr float kTurnPower = 0.50f;             // below this the rover barely turns
-constexpr float kTurnPulseDeg = 15.0f;          // 20 optional, was 35.0f: faster turn outdoors
+constexpr float kTurnPulseDeg = 10.0f;          // 20 optional, was 35.0f: faster turn outdoors
 constexpr uint32_t kTurnPulseOnMs = 300;        // was 100: a longer push breaks the friction
 constexpr float kTurnRampPerSec = 2.5f;         // turn power 0 to 0.5 in 0.2 s (0.5 / 2.5)
 constexpr uint32_t kTurnPulseOffMs = 200;       // was 300: shorter wait between pushes
@@ -157,8 +157,9 @@ constexpr int kBenchPanelMaxCm = 215;
 constexpr float kBenchMaxM = 15.0f;             // safety
 
 // Step 14: the wall of building I on the left
-constexpr int kIWallMinCm = 245;                // your measure: 260-290
+constexpr int kIWallMinCm = 100;                // your measure: 260-290
 constexpr int kIWallMaxCm = 305;
+constexpr float kIWallMinM = 6.0f;              // NEW: look only this far after the panel (run-group2: wall at 7.2 m)
 constexpr float kIWallMaxM = 20.0f;             // safety
 
 // Step 15: the small pillar in front, then stop
