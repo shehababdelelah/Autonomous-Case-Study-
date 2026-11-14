@@ -45,6 +45,20 @@ constexpr float kMaxPull = 0.15f;               // was 0.10f: the ramp needed ab
 constexpr float kMaxHeadingErrorDeg = 25.0f;    // lost the line: stop the run
 constexpr uint32_t kHeadingErrorMs = 1500;      // ...if it lasts this long
 
+// ---- Reset the door direction from a flat thing beside the rover (SideLine in Route.hpp) ----
+// The rover drives past it and watches the side distance. If the distance changes, the rover
+// is not parallel, and the door direction is corrected by that angle.
+constexpr bool kUseWallCRef = true;             // step 5: wall C on the left, before the right turn
+constexpr bool kUsePanelRef = false;            // step 7: the panel on the right (short, so less exact: test it first)
+constexpr bool kUseWallERef = true;             // step 9: wall E on the left
+constexpr float kRefMinLenM = 0.5f;             // the thing must be seen for at least this far
+constexpr float kWallRefMaxDeg = 12.0f;         // a bigger correction from a wall is not believed
+constexpr float kPanelRefMaxDeg = 6.0f;         // ...from the short panel
+constexpr int kPanelRefMinCm = 80;              // the panel is between these two on the right
+constexpr int kPanelRefMaxCm = 220;             // (your measure: about 150)
+constexpr float kPanelRefEndM = 3.0f;           // look for the panel only this far into step 7
+constexpr float kWallERefM = 2.5f;              // step 9: measure wall E over this far, then correct
+
 // ---- Turn on the spot, values from Robot_8 ----
 constexpr float kTurnPower = 0.50f;             // below this the rover barely turns
 constexpr float kTurnPulseDeg = 10.0f;          // 20 optional, was 35.0f: faster turn outdoors

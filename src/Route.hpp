@@ -31,6 +31,45 @@ class AppearFilter {
   bool present_ = false;
 };
 
+// The direction of a flat thing beside the rover, from how the side distance changes while the
+// rover drives past it. It fits a straight line through all the readings.
+class SideLine {
+ public:
+  void reset() { n_ = 0; sumM_ = sumCm_ = sumMM_ = sumMCm_ = sumHeading_ = 0; }
+
+  // sideCm: the side distance now. stepM: how far the step has driven. headingDeg: the heading
+  // now, counted from the door direction.
+  void add(float sideCm, float stepM, float headingDeg) {
+    if (n_ == 0) firstM_ = stepM;
+    const float m = stepM - firstM_;
+    lastM_ = stepM;
+    sumM_ += m;
+    sumCm_ += sideCm;
+    sumMM_ += m * m;
+    sumMCm_ += m * sideCm;
+    sumHeading_ += headingDeg;
+    ++n_;
+  }
+
+  bool seen() const { return n_ > 0; }
+  float lengthM() const { return n_ > 0 ? lastM_ - firstM_ : 0; }
+  float lastM() const { return lastM_; }
+  float headingDeg() const { return sumHeading_ / n_; }   // average while it was seen
+
+  // How fast the side distance opens, as an angle. + = the distance grows.
+  float openDeg() const {
+    const float spread = n_ * sumMM_ - sumM_ * sumM_;
+    if (n_ < 3 || spread <= 0) return 0;
+    const float cmPerM = (n_ * sumMCm_ - sumM_ * sumCm_) / spread;
+    return atanf(cmPerM / 100.0f) * RAD_TO_DEG;
+  }
+
+ private:
+  int n_ = 0;
+  float firstM_ = 0, lastM_ = 0;
+  float sumM_ = 0, sumCm_ = 0, sumMM_ = 0, sumMCm_ = 0, sumHeading_ = 0;
+};
+
 class Route {
  public:
   // The numbers match kLastStep in Settings.hpp. The page uses DONE = 25 and FAULT = 26.
@@ -117,9 +156,15 @@ class Route {
         break;
 
       case FORWARD_AFTER_C:
-        keepWallDistance(in, wrap360(startHeading_ - 90.0f), kWallNearCm, kWallFarCm);
+        // With the wall C reference the rover keeps one heading here: a straight line measures best.
+        if (!kUseWallCRef) keepWallDistance(in, wrap360(startHeading_ - 90.0f), kWallNearCm, kWallFarCm);
         driveStraight(in, dt);
-        if (reached(kAfterPillarsM)) finishStep(in.nowMs);
+        watchSide(in, 270);   // wall C
+        if (reached(kAfterPillarsM)) {
+          // The door direction is 90 deg to the right of wall C.
+          if (kUseWallCRef) resetDoorDirection(lineHeading(true) + 90.0f, kWallRefMaxDeg);
+          finishStep(in.nowMs);
+        }
         break;
 
       case TURN_RIGHT:
@@ -129,6 +174,16 @@ class Route {
       case DRIVE_TO_END:
         driveStraight(in, dt);
         if (panelFilter_.update(panelOnRight(), in.nowMs)) ++panels_;   // for the page only
+        if (kUsePanelRef && !refDone_) {
+          const float cm = rayCm(90);
+          if (stepM_ <= kPanelRefEndM && cm >= kPanelRefMinCm && cm <= kPanelRefMaxCm) {
+            line_.add(cm, stepM_, wrap180(in.headingDeg - startHeading_));
+          } else if (stepM_ > kPanelRefEndM || (line_.seen() && stepM_ - line_.lastM() > 0.30f)) {
+            // The panel has passed. The door direction is along the panel.
+            resetDoorDirection(lineHeading(false), kPanelRefMaxDeg);
+            refDone_ = true;
+          }
+        }
         if (endWallFilter_.update(stepM_ >= kToEndMinM && frontWallClose(), in.nowMs)) {
           ++walls_;                      // wall E counts as wall 3
           speed_ = left_ = right_ = 0;   // stop at once, the wall is close
@@ -145,6 +200,15 @@ class Route {
        case FORWARD_ALONG_E: {   // 9: along wall E until a pillar on the right, then kAfterEPillarM more
         driveStraight(in, dt);
         if (wallLeft(kLidarMinCm, kFollowWallMaxCm)) lastWallM_ = stepM_;   // wall E is still beside the rover
+        if (kUseWallERef && !refDone_) {
+          if (stepM_ < kWallERefM) {
+            watchSide(in, 270);   // wall E
+          } else {
+            // The door direction is 90 deg to the left of wall E. The rover then drives parallel to it.
+            resetDoorDirection(lineHeading(true) - 90.0f, kWallRefMaxDeg);
+            refDone_ = true;
+          }
+        }
         const bool pillar = pillarFilter_.update(stepM_ >= kAlongEMinM && farPillarRight(kEPillarMinCm, kEPillarMaxCm), in.nowMs);
         if (pillar && foundAtM_ < 0) foundAtM_ = stepM_;   // remember where the pillar was
         // Spare rule: the pillar was missed, but wall E has ended on the left.
@@ -287,6 +351,7 @@ class Route {
   bool blocked() const { return blocked_; }
   float left() const { return left_; }
   float right() const { return right_; }
+  float lastResetDeg() const { return lastResetDeg_; }   // last change of the door direction
   int pillars() const { return pillars_; }
   int walls() const { return walls_; }
   int panels() const { return panels_; }
@@ -429,6 +494,32 @@ class Route {
     const float middleCm = (nearCm + farCm) / 2.0f;
     const float steer = constrain((wallCm - middleCm) * kWallGain, -kWallMaxSteerDeg, kWallMaxSteerDeg);
     targetHeading_ = wrap360(wallHeading - steer);   // - = to the left, toward the wall
+  }
+
+  // ---- Reset the door direction from a flat thing beside the rover ----
+  // Adds the side distance now (270 = left, 90 = right) to the line, if the reading is good.
+  void watchSide(const Input& in, int sideDeg) {
+    const float cm = rayCm(sideDeg);
+    if (cm > 0) line_.add(cm, stepM_, wrap180(in.headingDeg - startHeading_));
+  }
+
+  // The compass direction of the thing the rover drove past. A thing on the left that gets
+  // farther away means the rover points to the right of it; on the right it is the other way.
+  float lineHeading(bool onLeft) const {
+    if (line_.lengthM() < kRefMinLenM) return -1000;   // not seen long enough
+    const float open = line_.openDeg();
+    return startHeading_ + line_.headingDeg() + (onLeft ? -open : open);
+  }
+
+  // Sets a new door direction, unless the change is too big to believe. Every later turn and
+  // the straight line of this step use it.
+  void resetDoorDirection(float doorDeg, float maxChangeDeg) {
+    if (doorDeg < -500) return;   // lineHeading() had no answer
+    const float change = wrap180(doorDeg - startHeading_);
+    if (fabsf(change) > maxChangeDeg) return;
+    startHeading_ = wrap360(startHeading_ + change);
+    targetHeading_ = wrap360(targetHeading_ + change);
+    lastResetDeg_ = change;
   }
 
   // ---- Moving ----
@@ -598,6 +689,8 @@ class Route {
     // Every step starts fresh: nothing seen yet.
     found_ = 0;
     foundAtM_ = -1;
+    line_.reset();
+    refDone_ = false;
     lastWallM_ = 0;
     pillarFilter_.reset(nowMs);
     wallFilter_.reset(nowMs);
@@ -641,6 +734,9 @@ class Route {
   float startHeading_ = 0, targetHeading_ = 0;
   float speed_ = 0, pull_ = 0, left_ = 0, right_ = 0;
   float spin_ = 0;   // turn power now, + = turn right; it ramps (spinFinished)
+  SideLine line_;            // the wall or panel beside the rover in this step (steps 5, 7, 9)
+  bool refDone_ = false;     // the door direction was already reset in this step
+  float lastResetDeg_ = 0;   // the last change of the door direction, for testing
   float stepM_ = 0, totalM_ = 0;
   float lastPillarM_ = 0;   // where the last pillar was counted, in metres of step 4
   float lastWallM_ = 0;     // where the wall we follow was last seen, in metres of this step (12, 22)
