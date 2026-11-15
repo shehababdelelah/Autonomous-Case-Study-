@@ -209,10 +209,16 @@ class Route {
             refDone_ = true;
           }
         }
-        const bool pillar = pillarFilter_.update(stepM_ >= kAlongEMinM && farPillarRight(kEPillarMinCm, kEPillarMaxCm), in.nowMs);
-        if (pillar && foundAtM_ < 0) foundAtM_ = stepM_;   // remember where the pillar was
+        // The same pillar check as in step 4: enough directions, seen long enough, and far enough
+        // from the pillar before. The step ends kAfterEPillarM after pillar number kEPillarsNeeded.
+        const bool seen = stepM_ >= kAlongEMinM && hits(90, kPillarFanDeg, kEPillarMinCm, kEPillarMaxCm) >= kPillarMinHits;
+        if (pillarFilter_.update(seen, in.nowMs) && (found_ == 0 || stepM_ - lastPillarM_ >= kPillarMinGapM)) {
+          ++found_;
+          lastPillarM_ = stepM_;
+          if (found_ == kEPillarsNeeded) foundAtM_ = stepM_;   // remember where the last pillar was
+        }
         // Spare rule: the pillar was missed, but wall E has ended on the left.
-        const bool wallEnded = foundAtM_ < 0 && lastWallM_ >= kAlongEMinM && reached(lastWallM_ + kAfterEWallEndM);
+        const bool wallEnded = foundAtM_ < 0 && lastWallM_ > 0 && lastWallM_ >= kAlongEMinM && reached(lastWallM_ + kAfterEWallEndM);
         if (foundAtM_ >= 0 && reached(foundAtM_ + kAfterEPillarM)) finishStep(in.nowMs);
         else if (wallEnded) finishStep(in.nowMs);
         else if (stepM_ >= kAlongEMaxM) fail("Pillar along E not found");

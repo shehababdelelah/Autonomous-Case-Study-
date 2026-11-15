@@ -107,6 +107,8 @@ constexpr float kWallMaxAngleDeg = 20.0f;       // wall more than this off the p
 // Pillar on the right
 constexpr int kPillarMinCm = 90;           // was 50: a person at 87 cm gave 17 hits
 constexpr int kPillarMaxCm = 180;          // was 250: pillar 1 is at about 120 cm
+constexpr int kEPillarsNeeded = 2; 
+            // count this many pillars along wall E (they are about 4 m apart)
 constexpr int kPillarFanDeg = 8;
 constexpr int kPillarMinHits = 6;          // was 3: one leg of a person gives about 4-5
 constexpr uint32_t kPillarSeenMs = 800;     // was 150: a person walking past is seen for less
@@ -144,9 +146,9 @@ constexpr int kFarPillarMinHits = 4;            // steps 9, 21: a pillar 2-2.5 m
 constexpr int kFollowWallMaxCm = 120;           // steps 12, 21, 22: the wall we follow counts as there
 
 // Step 9: along wall E until a pillar on the right, then a little more
-constexpr int kEPillarMinCm = 200;              // your measure: about 220
-constexpr int kEPillarMaxCm = 240;
-constexpr float kAlongEMinM = 0.0f;             // look for the pillar only after this far (0 = at once)
+constexpr int kEPillarMinCm = 165;              // your measure: about 220
+constexpr int kEPillarMaxCm = 205;
+constexpr float kAlongEMinM = 4.0f;             // look for the pillar only after this far (0 = at once)
 constexpr float kAfterEPillarM = 0.80f;         // then drive this far and stop
 constexpr float kAlongEMaxM = 15.0f;            // safety: stop the run if the pillar is not found
 
@@ -159,16 +161,16 @@ constexpr int kESideNearCm = 60;                // follow the wall between these
 constexpr int kESideFarCm = 80;
 constexpr float kESideGoneM = 0.5f;             // the wall must be gone this far to count as ended
 constexpr int kHydrantMinCm = 115;              // your measure: 130-140
-constexpr int kHydrantMaxCm = 155;
+constexpr int kHydrantMaxCm = 170;
 constexpr float kHydrantMaxM = 6.0f;            // safety: after the wall end (your measure: about 3.5 m)
 constexpr float kESideMaxM = 40.0f;             // safety: stop the run if the wall never ends
 
 // Step 13: two bench legs, then a panel, on the left
 constexpr int kLegMinCm = 105;                  // your measure: 120-130
-constexpr int kLegMaxCm = 145;
+constexpr int kLegMaxCm = 175;
 constexpr int kLegsNeeded = 2;
-constexpr int kBenchPanelMinCm = 175;           // your measure: 190-200
-constexpr int kBenchPanelMaxCm = 215;
+constexpr int kBenchPanelMinCm = 195;           // your measure: 190-200
+constexpr int kBenchPanelMaxCm = 245;
 constexpr float kBenchMaxM = 15.0f;             // safety
 
 // Step 14: the wall of building I on the left
