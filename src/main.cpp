@@ -111,6 +111,7 @@ static void addLogRow(const Route::Input& in, uint32_t runMs) {
   row.left = lroundf(route.left() * 100);
   row.right = lroundf(route.right() * 100);
   row.heading = lroundf(in.headingDeg * 10);
+  row.pitch = lroundf(in.pitchDeg * 10);
   row.target = lroundf(route.targetHeading() * 10);
   row.distanceCm = lroundf(route.totalM() * 100);
   row.frontCm = lidar.distanceMm(0) / 10;
@@ -174,6 +175,7 @@ void loop() {
     Route::Input in;
     in.nowMs = nowMs;
     in.headingDeg = imu.headingDeg;
+    in.pitchDeg = imu.pitchDeg;
     in.imuOk = hasImu && nowMs - imu.sampleMs <= kMaxImuAgeMs && isfinite(imu.headingDeg);
     in.roverOk = rover.connected();
     in.lidarOk = nowMs - lastPacketMs <= kMaxLidarAgeMs;

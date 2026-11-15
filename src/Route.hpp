@@ -91,6 +91,7 @@ class Route {
   struct Input {
     uint32_t nowMs;
     float headingDeg;   // 0 to 360, clockwise is positive
+    float pitchDeg;     // nose up or down. Only written to the CSV for now, to measure the ramp
     bool imuOk, roverOk, lidarOk;
   };
 
@@ -122,6 +123,7 @@ class Route {
 
   // Call this every 50 ms.
   void update(const Input& in) {
+    pitchDeg_ = in.pitchDeg;
     const float dt = (in.nowMs - lastMs_) / 1000.0f;
     lastMs_ = in.nowMs;
 
@@ -447,6 +449,7 @@ class Route {
   float left() const { return left_; }
   float right() const { return right_; }
   float lastResetDeg() const { return lastResetDeg_; }   // last change of the door direction
+  float pitchDeg() const { return pitchDeg_; }           // newest IMU pitch, for the CSV
   int pillars() const { return pillars_; }
   int walls() const { return walls_; }
   int panels() const { return panels_; }
@@ -915,6 +918,7 @@ class Route {
   SideLine line_;            // the wall or panel beside the rover in this step (steps 5, 7, 9)
   bool refDone_ = false;     // the door direction was already reset in this step
   float lastResetDeg_ = 0;   // the last change of the door direction, for testing
+  float pitchDeg_ = 0;       // newest IMU pitch, kept only so the CSV can show it
   float stepM_ = 0, totalM_ = 0;
   float lastPillarM_ = 0;   // where the last pillar was counted, in metres of step 4
   float lastWallM_ = 0;     // where the wall we follow was last seen, in metres of this step (12, 22)

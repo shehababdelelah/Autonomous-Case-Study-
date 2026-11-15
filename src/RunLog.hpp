@@ -15,6 +15,7 @@ class RunLog {
     uint8_t step, blocked;
     int8_t left, right;                 // wheel command x 100
     uint16_t heading, target;           // degrees x 10
+    int16_t pitch;                      // IMU pitch x 10, nose up or down
     uint16_t distanceCm, frontCm, leftCm, rightCm;
     uint8_t pillars, walls;
     uint8_t pillarHits, wallHits;       // LiDAR directions that see a pillar / a wall
@@ -110,7 +111,7 @@ class RunLog {
   static size_t header(char* line, size_t size) {
     const int n = snprintf(line, size,
         "time_s,step,blocked,heading_deg,target_deg,error_deg,left,right,"
-        "distance_m,front_cm,left_cm,right_cm,pillars,walls,pillar_hits,wall_hits\n");
+        "distance_m,front_cm,left_cm,right_cm,pillars,walls,pillar_hits,wall_hits,pitch_deg\n");
     return n > 0 ? min((size_t)n, size - 1) : 0;
   }
 
@@ -118,10 +119,11 @@ class RunLog {
     float error = (r.target - r.heading) / 10.0f;   // + = must turn right
     while (error > 180.0f) error -= 360.0f;
     while (error <= -180.0f) error += 360.0f;
-    const int n = snprintf(line, size, "%.2f,%u,%u,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u,%u,%u\n",
+    const int n = snprintf(line, size, "%.2f,%u,%u,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u,%u,%u,%.1f\n",
         r.ms / 1000.0f, r.step, r.blocked, r.heading / 10.0f, r.target / 10.0f, error,
         r.left / 100.0f, r.right / 100.0f, r.distanceCm / 100.0f,
-        r.frontCm, r.leftCm, r.rightCm, r.pillars, r.walls, r.pillarHits, r.wallHits);
+        r.frontCm, r.leftCm, r.rightCm, r.pillars, r.walls, r.pillarHits, r.wallHits,
+        r.pitch / 10.0f);
     return n > 0 ? min((size_t)n, size - 1) : 0;
   }
 
