@@ -55,6 +55,7 @@ class SideLine {
   float lengthM() const { return n_ > 0 ? lastM_ - firstM_ : 0; }
   float lastM() const { return lastM_; }
   float headingDeg() const { return sumHeading_ / n_; }   // average while it was seen
+  float avgCm() const { return n_ > 0 ? sumCm_ / n_ : 0; }   // average side distance
 
   // How fast the side distance opens, as an angle. + = the distance grows.
   float openDeg() const {
@@ -72,14 +73,16 @@ class SideLine {
 
 class Route {
  public:
-  // The numbers match kLastStep in Settings.hpp. The page uses DONE = 25 and FAULT = 26.
+  // The numbers match kLastStep in Settings.hpp. The page uses DONE = 30 and FAULT = 31.
+  // Steps 15-17 are the beam detour: they run only when the beam was confirmed in step 14 or 18.
   enum Step : uint8_t {
     IDLE, FORWARD_OUT, TURN_LEFT, FORWARD_NO_LIDAR, COUNT_PILLARS,                       //  0- 4
-    FORWARD_AFTER_C, TURN_RIGHT, DRIVE_TO_END, TURN_RIGHT_AT_E, FORWARD_ALONG_E,        //  5- 9
-    TURN_LEFT_AT_E, FIND_E_SIDE, ALONG_E_SIDE, FIND_BENCH_PANEL, FIND_I_WALL,            // 10-14
-    FIND_SMALL_PILLAR, TURN_RIGHT_AT_PILLAR, FORWARD_AFTER_PILLAR, TURN_LEFT_TO_G,       // 15-18
-    DRIVE_TO_G, TURN_RIGHT_AT_G, ALONG_K, PAST_K, TURN_RIGHT_LAST, TO_LAST_PILLAR,       // 19-24
-    DONE, FAULT                                                                          // 25-26
+    FORWARD_AFTER_C, TURN_RIGHT, DRIVE_TO_END, TURN_RIGHT_AT_E, FORWARD_ALONG_E,         //  5- 9
+    TURN_LEFT_AT_E, FIND_E_SIDE, ALONG_E_SIDE, FIND_PANEL, TO_RAMP,                      // 10-14
+    BEAM_TURN_LEFT, BEAM_SIDESTEP, BEAM_TURN_RIGHT, CROSS_RAMP, SETTLE,                  // 15-19
+    FIND_SMALL_PILLAR, TURN_RIGHT_AT_PILLAR, FORWARD_AFTER_PILLAR, TURN_LEFT_TO_G,       // 20-23
+    DRIVE_TO_G, TURN_RIGHT_AT_G, ALONG_K, PAST_K, TURN_RIGHT_LAST, TO_LAST_PILLAR,       // 24-29
+    DONE, FAULT                                                                          // 30-31
   };
 
 
@@ -100,6 +103,9 @@ class Route {
     lastStep_ = lastStep;
     pillars_ = walls_ = panels_ = 0;
     speed_ = pull_ = totalM_ = 0;
+    panelCm_ = aimDeg_ = 0;
+    beamTries_ = 0;
+    iWallDoorDeg_ = -1000;
     blocked_ = pausing_ = stepEnded_ = false;
     lastMs_ = in.nowMs;
     enterStep(static_cast<Step>(firstStep), in.nowMs);
@@ -126,6 +132,8 @@ class Route {
     if (!in.imuOk) return fail("IMU data lost");
     if (!in.lidarOk) return fail("LiDAR data lost");
     if (pausing_) return pause(in.nowMs, dt);
+    // Steps 14 and 18: standing still in front of something, checking whether it is the beam.
+    if (watching_ && (step_ == TO_RAMP || step_ == CROSS_RAMP)) return watchBeam(in, dt);
 
     switch (step_) {
       case FORWARD_OUT:
@@ -257,35 +265,97 @@ class Route {
         break;
       }
 
-      case FIND_BENCH_PANEL:   // 13: two bench legs on the left, then a panel on the left
+      case FIND_PANEL: {   // 13: the panel on the left. How close it comes says where the ramp line is.
         driveStraight(in, dt);
-        if (found_ < kLegsNeeded && smallFilter_.update(smallLeft(kLegMinCm, kLegMaxCm), in.nowMs)) ++found_;
-        if (panelFilter_.update(found_ >= kLegsNeeded && panelLeft(kBenchPanelMinCm, kBenchPanelMaxCm), in.nowMs)) {
-          ++panels_;
+        const bool panel = panelLeft(kPanelLeftMinCm, kPanelLeftMaxCm);
+        if (panel) {
+          lastWallM_ = stepM_;                  // the panel is still in view
+          const int cm = sideMinCm(270, kPanelFanDeg, kPanelLeftMinCm, kPanelLeftMaxCm);
+          if (cm > 0 && (panelCm_ == 0 || cm < panelCm_)) panelCm_ = cm;   // its closest point
+        }
+        if (found_ == 0) {
+          if (panelFilter_.update(panel, in.nowMs)) {
+            found_ = 1;
+            ++panels_;
+          } else if (stepM_ >= kPanelMaxM) {
+            fail("Panel not found");
+          }
+        } else if (stepM_ - lastWallM_ >= kPanelGoneM) {
+          // The panel has passed, so panelCm_ is its real distance from the rover's line. Reading
+          // more than kPanelAimedCm means the rover is that much to the right of the ramp line, so
+          // the next step aims a little to the left and closes the gap.
+          const float errCm = panelCm_ - kPanelAimedCm;
+          aimDeg_ = -constrain(atanf(errCm / (kRampAimM * 100.0f)) * RAD_TO_DEG,
+                               -kRampAimMaxDeg, kRampAimMaxDeg);
           nextStepNoStop(in.nowMs);
-        } else if (stepM_ >= kBenchMaxM) {
-          fail("Bench legs or panel not found");
+        }
+        break;
+      }
+
+      case TO_RAMP:   // 14: forward to the ramp entrance, closing the side gap; watches for the beam
+        if (watching_) break;                   // stopped in front of something: watchBeam() handles it
+        targetHeading_ = wrap360(startHeading_ + (stepM_ < kRampAimM ? aimDeg_ : 0.0f));
+        driveStraight(in, dt);
+        if (smellsLikeBeam(in)) watching_ = true;
+        else if (reached(kPanelToRampM)) finishStepTo(in.nowMs, CROSS_RAMP);
+        else if (stepM_ >= kToRampMaxM) fail("Ramp entrance not reached");
+        break;
+
+      case BEAM_TURN_LEFT:    // 15: the beam was confirmed, so the rover steps around it
+      case BEAM_TURN_RIGHT:   // 17: back to the direction it had before
+        if (turnFinished(in, dt)) finishStep(in.nowMs);
+        break;
+
+      case BEAM_SIDESTEP:   // 16: kBeamSideStepM to the left, past the beam
+        driveStraight(in, dt);
+        if (reached(kBeamSideStepM)) finishStep(in.nowMs);
+        break;
+
+      case CROSS_RAMP:   // 18: over the ramp. The wall of I on the left gives the line for the next steps.
+        if (watching_) break;                   // stopped in front of something: watchBeam() handles it
+        driveStraight(in, dt);
+        if (wallLeft(kIWallMinCm, kIWallMaxCm)) {
+          if (found_ == 0) {
+            found_ = 1;
+            ++walls_;                           // the wall of I counts as wall 5
+          }
+          watchSide(in, 270, kIWallRayMaxCm);   // measure its direction while driving past it
+        }
+        if (smellsLikeBeam(in)) {
+          watching_ = true;
+        } else if (reached(kRampClearM)) {
+          if (found_ == 0) fail("Wall of I not found");
+          else {
+            iWallDoorDeg_ = lineHeading(true);  // the rover drives along this wall, so it is the door direction
+            finishStep(in.nowMs);
+          }
         }
         break;
 
-      case FIND_I_WALL:   // 14: the wall of building I on the left
-        driveStraight(in, dt);
-        if (wallFilter_.update(stepM_ >= kIWallMinM && wallLeft(kIWallMinCm, kIWallMaxCm), in.nowMs)) {
-          ++walls_;
-          nextStepNoStop(in.nowMs);
-        } else if (stepM_ >= kIWallMaxM) {
-          fail("Wall of I not found");
+      case SETTLE:   // 19: stand still until the IMU is steady, then straighten up from the wall of I
+        speed_ = left_ = right_ = 0;
+        if (settleHeading_ < -500) settleHeading_ = in.headingDeg;
+        if (in.nowMs - stepStartMs_ < kSettleMs) break;
+        // The rover did not move here, so any heading change is the IMU settling. It is added to
+        // the wall measurement, which was taken before the rover stopped.
+        if (kUseIWallRef) {
+          resetDoorDirection(iWallDoorDeg_ + wrap180(in.headingDeg - settleHeading_), kWallRefMaxDeg);
         }
+        finishStep(in.nowMs);
         break;
 
-      case FIND_SMALL_PILLAR:   // 15: the small pillar in front, then stop
-        driveStraight(in, dt);
-        if (smallFilter_.update(somethingFront(kSmallPillarStopCm), in.nowMs)) {
-          speed_ = left_ = right_ = 0;   // stop at once, it is close
-          finishStep(in.nowMs);
-        } else if (stepM_ >= kSmallPillarMaxM) {
-          fail("Small pillar not found");
+      case FIND_SMALL_PILLAR:   // 20: something in front within kSmallPillarSeenCm, then stop and check it
+        if (watching_) {
+          if (watchFront(in, dt, kSmallPillarSeenCm, kSmallPillarHoldMs, kSmallMinHits, 999)) {
+            finishStep(in.nowMs);               // confirmed: step 21 turns right
+          } else if (watchGone_) {
+            watching_ = false;                  // it walked away: drive on
+          }
+          break;
         }
+        driveStraight(in, dt);
+        if (smallFilter_.update(somethingFront(kSmallPillarSeenCm), in.nowMs)) watching_ = true;
+        else if (stepM_ >= kSmallPillarMaxM) fail("Small pillar not found");
         break;
 
       case TURN_RIGHT_AT_PILLAR:   // 16
@@ -358,6 +428,8 @@ class Route {
   float left() const { return left_; }
   float right() const { return right_; }
   float lastResetDeg() const { return lastResetDeg_; }   // last change of the door direction
+  float panelCm() const { return panelCm_; }             // step 13, for testing
+  float aimDeg() const { return aimDeg_; }               // step 14, for testing
   int pillars() const { return pillars_; }
   int walls() const { return walls_; }
   int panels() const { return panels_; }
@@ -395,8 +467,13 @@ class Route {
       case TURN_LEFT_AT_E: return "Turning left after wall E";
       case FIND_E_SIDE: return "Looking for the side wall of E";
       case ALONG_E_SIDE: return "Along E side, to the hydrant";
-      case FIND_BENCH_PANEL: return "Looking for bench and panel";
-      case FIND_I_WALL: return "Looking for the wall of I";
+      case FIND_PANEL: return "Looking for the panel";
+      case TO_RAMP: return "Forward to the ramp";
+      case BEAM_TURN_LEFT: return "Beam: turning left";
+      case BEAM_SIDESTEP: return "Beam: step to the left";
+      case BEAM_TURN_RIGHT: return "Beam: turning back";
+      case CROSS_RAMP: return "Over the ramp, wall of I left";
+      case SETTLE: return "Standing still, IMU settling";
       case FIND_SMALL_PILLAR: return "Looking for the small pillar";
       case TURN_RIGHT_AT_PILLAR: return "Turning right at small pillar";
       case FORWARD_AFTER_PILLAR: return "Forward after small pillar";
@@ -468,12 +545,12 @@ class Route {
   // ---- Steps 4, 5, 12, 21, 22: drive parallel to the wall on the left ----
   // Average distance in cm around one direction. 0 if fewer than 3 good readings, or if they
   // do not agree: then the ray is at the end of a wall and half sees what is behind it.
-  float rayCm(int centerDeg) const {
+  float rayCm(int centerDeg, int maxCm = kWallRayMaxCm) const {
     float sum = 0;
     int count = 0, lowest = 10000, highest = 0;
     for (int angle = centerDeg - 2; angle <= centerDeg + 2; ++angle) {
       const int cm = lidar_.distanceMm(angle) / 10;
-      if (cm >= kLidarMinCm && cm <= kWallRayMaxCm) {
+      if (cm >= kLidarMinCm && cm <= maxCm) {
         sum += cm;
         ++count;
         lowest = min(lowest, cm);
@@ -504,8 +581,8 @@ class Route {
 
   // ---- Reset the door direction from a flat thing beside the rover ----
   // Adds the side distance now (270 = left, 90 = right) to the line, if the reading is good.
-  void watchSide(const Input& in, int sideDeg) {
-    const float cm = rayCm(sideDeg);
+  void watchSide(const Input& in, int sideDeg, int maxCm = kWallRayMaxCm) {
+    const float cm = rayCm(sideDeg, maxCm);
     if (cm > 0) line_.add(cm, stepM_, wrap180(in.headingDeg - startHeading_));
   }
 
@@ -526,6 +603,74 @@ class Route {
     startHeading_ = wrap360(startHeading_ + change);
     targetHeading_ = wrap360(targetHeading_ + change);
     lastResetDeg_ = change;
+  }
+
+  // ---- Looking at something in front while standing still ----
+  // The closest reading in the front fan, or 0 when nothing is seen there.
+  int frontMinCm(int halfDeg) const {
+    int best = 0;
+    for (int angle = -halfDeg; angle <= halfDeg; ++angle) {
+      const int cm = lidar_.distanceMm(angle) / 10;
+      if (cm >= kLidarMinCm && (best == 0 || cm < best)) best = cm;
+    }
+    return best;
+  }
+
+  // The closest reading in a side fan, 0 when nothing is inside the band. For a flat thing beside
+  // the rover this is how far it is from the rover's line.
+  int sideMinCm(int centerDeg, int halfDeg, int minCm, int maxCm) const {
+    int best = 0;
+    for (int angle = centerDeg - halfDeg; angle <= centerDeg + halfDeg; ++angle) {
+      const int cm = lidar_.distanceMm(angle) / 10;
+      if (cm >= minCm && cm <= maxCm && (best == 0 || cm < best)) best = cm;
+    }
+    return best;
+  }
+
+  // Slows to a stop and then looks at the thing in front. It is only believed when it stays at the
+  // same distance and the same width for holdMs while the rover stands still. That is what tells a
+  // beam or a pillar from a person: a person moves, or walks away (then watchGone_ becomes true).
+  bool watchFront(const Input& in, float dt, int nearCm, uint32_t holdMs, int minHits, int maxHits) {
+    speed_ = max(speed_ - kRampPerSec * dt, 0.0f);   // soft stop, easy on the gearbox
+    left_ = speed_;
+    right_ = speed_ * kRightTrim;
+    const int cm = frontMinCm(kFrontConeDeg);
+    const int count = hits(0, kFrontConeDeg, kLidarMinCm, nearCm);
+    watchGone_ = cm == 0 || cm > nearCm || count < minHits;
+    if (watchGone_) return false;                    // nothing there any more
+    if (count > maxHits) {                           // too wide: a wall or a person right in front
+      holdSinceMs_ = in.nowMs;
+      return false;
+    }
+    if (speed_ > 0) {                                // still rolling: start again when it stands
+      holdSinceMs_ = in.nowMs;
+      holdCm_ = cm;
+      return false;
+    }
+    if (abs(cm - holdCm_) > kFrontMoveCm) {          // it moved: start the time again
+      holdSinceMs_ = in.nowMs;
+      holdCm_ = cm;
+      return false;
+    }
+    return in.nowMs - holdSinceMs_ >= holdMs;
+  }
+
+  // Something in front, close, and at the place where the beam stands (the ramp entrance). Anything
+  // in front anywhere else is not the beam: the rover then waits for it like any other obstacle.
+  bool smellsLikeBeam(const Input& in) {
+    const bool place = step_ == TO_RAMP ? stepM_ >= kPanelToRampM - kBeamWindowM
+                                        : stepM_ <= kBeamUntilM;
+    return smallFilter_.update(place && somethingFront(kBeamStopCm), in.nowMs);
+  }
+
+  // Steps 14 and 18: the rover stands in front of something. If it is the beam, it steps around it.
+  void watchBeam(const Input& in, float dt) {
+    if (watchFront(in, dt, kBeamStopCm, kBeamHoldMs, kBeamMinHits, kBeamMaxHits)) {
+      if (++beamTries_ > kBeamMaxTries) fail("The beam is still in the way");
+      else finishStepTo(in.nowMs, BEAM_TURN_LEFT);
+    } else if (watchGone_) {
+      watching_ = false;                             // it moved away: drive on
+    }
   }
 
   // ---- Moving ----
@@ -657,6 +802,15 @@ class Route {
     blocked_ = false;   // a step can end next to a wall; the next step checks again
   }
 
+  // Ends the step and then goes to a chosen step, not the next one (the beam detour).
+  void finishStepTo(uint32_t nowMs, Step next) {
+    noteStepEnd(nowMs, "done");
+    nextStep_ = (step_ >= lastStep_ || next > lastStep_) ? DONE : next;
+    pausing_ = true;
+    pauseStartMs_ = nowMs;
+    blocked_ = false;
+  }
+
   // Goes to the next step while still driving, unless this is the last test step.
   void nextStepNoStop(uint32_t nowMs) {
     if (step_ >= lastStep_) {
@@ -697,6 +851,11 @@ class Route {
     foundAtM_ = -1;
     line_.reset();
     refDone_ = false;
+    watching_ = false;
+    watchGone_ = false;
+    holdSinceMs_ = nowMs;
+    holdCm_ = 0;
+    settleHeading_ = -1000;
     lastWallM_ = 0;
     pillarFilter_.reset(nowMs);
     wallFilter_.reset(nowMs);
@@ -705,8 +864,9 @@ class Route {
     smallFilter_.reset(nowMs);
 
     // Turns: the new direction, counted from startHeading_ (the way the rover faced at the door).
-    if (next == TURN_LEFT) targetHeading_ = wrap360(startHeading_ - 90.0f); // + 90 Test turns right
-    if (next == TURN_RIGHT || next == TURN_LEFT_AT_E || next == TURN_LEFT_TO_G) {
+    if (next == TURN_LEFT || next == BEAM_TURN_LEFT) targetHeading_ = wrap360(startHeading_ - 90.0f);
+    if (next == TURN_RIGHT || next == TURN_LEFT_AT_E || next == TURN_LEFT_TO_G ||
+        next == BEAM_TURN_RIGHT) {
       targetHeading_ = startHeading_;                       // the same way as at the door
     }
     if (next == TURN_RIGHT_AT_E || next == TURN_RIGHT_AT_PILLAR || next == TURN_RIGHT_AT_G) {
@@ -750,6 +910,16 @@ class Route {
   int found_ = 0;           // things found in this step: bench legs (13), pillars (21), wall G (22)
   int pillars_ = 0, walls_ = 0, panels_ = 0;
   bool blocked_ = false, pausing_ = false;
+  // Steps 13 to 20
+  float panelCm_ = 0;        // how far the panel read on the left (step 13)
+  float aimDeg_ = 0;         // how far to aim to the side in step 14, from the panel
+  int beamTries_ = 0;        // how often the rover stepped around the beam in this run
+  bool watching_ = false;    // standing still, looking at something in front
+  bool watchGone_ = false;   // the thing in front went away by itself
+  uint32_t holdSinceMs_ = 0; // since when it stands at the same distance
+  int holdCm_ = 0;           // how far it stood then
+  float iWallDoorDeg_ = -1000;   // door direction measured from the wall of I (step 18)
+  float settleHeading_ = -1000;  // heading when the rover stopped in step 19
   uint32_t lastMs_ = 0, stepStartMs_ = 0, pauseStartMs_ = 0;
   uint32_t clearSinceMs_ = 0, inToleranceSinceMs_ = 0, headingBadSinceMs_ = 0;
 };

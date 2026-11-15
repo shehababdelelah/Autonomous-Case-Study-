@@ -18,7 +18,7 @@
 // 21 along wall K, 2 pillars right     22 past the end of K, wall G left
 // 23 turn right 90                     24 stop at the last pillar: mission finished
 
-constexpr int kLastStep = 15;              // next test: new wall E rule (step 7) + right turn at E (step 8)
+constexpr int kLastStep = 29;              // next test: new wall E rule (step 7) + right turn at E (step 8)
 
 // ---- Driving ----
 constexpr float kDriveSpeed = 0.30f;    // was 0.30f: the weak left side needs more power
@@ -148,12 +148,13 @@ constexpr int kFollowWallMaxCm = 120;           // steps 12, 21, 22: the wall we
 // Step 9: along wall E until a pillar on the right, then a little more
 constexpr int kEPillarMinCm = 165;              // your measure: about 220
 constexpr int kEPillarMaxCm = 205;
-constexpr float kAlongEMinM = 4.0f;             // look for the pillar only after this far (0 = at once)
+constexpr float kAlongEMinM = 0.0f;             // look for the pillar only after this far (0 = at once)
 constexpr float kAfterEPillarM = 0.80f;         // then drive this far and stop
 constexpr float kAlongEMaxM = 15.0f;            // safety: stop the run if the pillar is not found
 
 // Step 11: the side wall of E on the left
-constexpr int kESideFindMaxCm = 90;             // your measure: 80
+constexpr int kESideFindMaxCm = 130;            // your measure: 80, but after step 9 the wall
+                                                // can be 95 cm away
 constexpr float kFindESideMaxM = 5.0f;          // safety: stop the run if the wall is not found
 
 // Step 12: along the side wall of E; after its end, on to the fire hydrant
@@ -165,32 +166,62 @@ constexpr int kHydrantMaxCm = 170;
 constexpr float kHydrantMaxM = 6.0f;            // safety: after the wall end (your measure: about 3.5 m)
 constexpr float kESideMaxM = 40.0f;             // safety: stop the run if the wall never ends
 
-// Step 13: two bench legs, then a panel, on the left
-constexpr int kLegMinCm = 105;                  // your measure: 120-130
-constexpr int kLegMaxCm = 175;
-constexpr int kLegsNeeded = 2;
-constexpr int kBenchPanelMinCm = 195;           // your measure: 190-200
-constexpr int kBenchPanelMaxCm = 245;
-constexpr float kBenchMaxM = 15.0f;             // safety
+// ---- Steps 13 to 20: panel, beam, ramp, settle, small pillar ----
+// Step 13: the panel on the left. How far it reads tells the rover how far it is from the ramp line.
+constexpr int kPanelLeftMinCm = 170;            // your measure: 190-250
+constexpr int kPanelLeftMaxCm = 260;
+constexpr int kPanelAimedCm = 190;              // MEASURE: the panel reads this when the rover is lined up
+                                                // with the ramp (the run that crossed the ramp read 187-192)
+constexpr float kPanelGoneM = 0.30f;            // the panel must be out of sight this far before
+                                                // step 13 ends (then its closest point is known)
+constexpr float kPanelMaxM = 15.0f;             // safety
 
-// Step 14: the wall of building I on the left
-constexpr int kIWallMinCm = 100;                // your measure: 260-290
-constexpr int kIWallMaxCm = 305;
-constexpr float kIWallMinM = 6.0f;              // NEW: look only this far after the panel (run-group2: wall at 7.2 m)
-constexpr float kIWallMaxM = 20.0f;             // safety
+// Step 14: forward to the ramp. The rover closes the side gap the panel measured, and watches for the beam.
+constexpr float kPanelToRampM = 2.00f;          // MEASURE: end of step 13 to the ramp entrance
+                                                // (your 250 cm from the panel, minus the panel itself)
+constexpr float kRampAimM = 1.50f;              // it closes the side gap over this far, then drives straight
+constexpr float kRampAimMaxDeg = 10.0f;         // never aim more than this to the side
+constexpr float kToRampMaxM = 6.0f;             // safety
 
-// Step 15: the small pillar in front, then stop
-constexpr int kSmallPillarStopCm = 80;          // your measure: 50-60; it stops about 10 cm closer than this
+// The beam on the right at the ramp entrance (your measure: about 40 cm wide).
+// The rover stops in front of it and looks at it while standing still, so a person is not taken for
+// the beam: a beam keeps the same distance and the same width, a person moves or walks away.
+constexpr int kBeamStopCm = 75;                 // stop when something in front is this close
+                                                // (75 from the LiDAR = 60 cm from the rover front)
+constexpr uint32_t kBeamHoldMs = 1500;          // it must stay still and the same size this long
+constexpr int kBeamMinHits = 10;                // CHECK: 40 cm at 75 cm fills about 30 of the 61 front directions
+constexpr int kBeamMaxHits = 50;                // more than this is a wall, not the beam
+constexpr int kFrontMoveCm = 15;                // it may move this much while it is checked
+constexpr float kBeamSideStepM = 0.60f;         // the detour: turn left, this far forward, turn right
+constexpr int kBeamMaxTries = 2;                // after this many detours the run stops
+constexpr float kBeamWindowM = 1.40f;           // step 14: the beam is only believed in the last metres
+                                                // before kPanelToRampM, where the beam stands
+constexpr float kBeamUntilM = 0.80f;            // step 18: ...and only in the first metres of the ramp
+
+// Step 18: over the ramp, with the wall of building I on the left
+constexpr int kIWallMinCm = 190;                // your measure: 260-300. It is wide enough to still
+                                                // find the wall after a 60 cm step around the beam.
+constexpr int kIWallMaxCm = 340;
+constexpr int kIWallRayMaxCm = 400;             // the wall of I is farther than kWallRayMaxCm, so it has its own limit
+constexpr float kRampClearM = 4.00f;            // MEASURE: ramp entrance until the rover is fully off the ramp
+constexpr bool kUseIWallRef = true;             // take the straight line for the next steps from the wall of I
+
+// Step 19: stand still so the IMU settles, then correct the direction from the wall of I
+constexpr uint32_t kSettleMs = 3000;
+
+// Step 20: the small pillar in front, then stop
+constexpr int kSmallPillarSeenCm = 200;         // your measure: stop about this far in front of it
+constexpr uint32_t kSmallPillarHoldMs = 1500;   // it must stand still this long (a person walks away)
 constexpr float kSmallPillarMaxM = 15.0f;       // safety
 
-// Step 17: forward between the turns at the small pillar
+// Step 22: forward between the turns at the small pillar
 constexpr float kAfterSmallPillarM = 1.30f;     // your measure: 120-140 cm
 
-// Step 19: wall G in front, then stop
+// Step 24: wall G in front, then stop
 constexpr int kGStopCm = 210;                   // your measure: 180-190; it stops about 20 cm closer than this
 constexpr float kToGMaxM = 30.0f;               // safety
 
-// Step 21: along wall K on the left, count two pillars on the right
+// Step 26: along wall K on the left, count two pillars on the right
 constexpr int kKWallNearCm = 80;                // follow wall K between these two (your measure: 80-90)
 constexpr int kKWallFarCm = 90;
 constexpr int kKPillarMinCm = 225;              // your measure: 240-250
@@ -198,13 +229,13 @@ constexpr int kKPillarMaxCm = 265;
 constexpr int kKPillarsNeeded = 2;
 constexpr float kAlongKMaxM = 30.0f;            // safety
 
-// Step 22: past the end of wall K, wall G on the left, then stop
+// Step 27: past the end of wall K, wall G on the left, then stop
 constexpr int kGLeftMinCm = 160;                // your measure: about 180
 constexpr int kGLeftMaxCm = 200;
 constexpr float kAfterKWallM = 2.30f;           // stop this far after the end of wall K
 constexpr float kPastKMaxM = 15.0f;             // safety
 
-// Step 24: the last pillar in front, then stop: mission finished
+// Step 29: the last pillar in front, then stop: mission finished
 constexpr int kLastPillarStopCm = 55;           // your measure: about 30 from the rover front = 45 on the page;
                                                 // it stops about 10 cm closer than this
 constexpr float kLastPillarMaxM = 15.0f;        // safety
@@ -220,15 +251,18 @@ struct TestGroup {
 };
 constexpr TestGroup kTestGroups[] = {
   {"B building to E building", 1, 8, 0},                // at the door
-  {"E building to I building", 9, 15, 90},              // at wall E, facing along it
-  {"I building to K building", 16, 21, 0},              // in front of the small pillar
-  {"K building to H building, end of mission", 22, 24, 90},  // next to wall K, facing along it
+  {"E building to I building", 9, 20, 90},              // at wall E, facing along it
+  {"I building to K building", 21, 26, 0},              // in front of the small pillar
+  {"K building to H building, end of mission", 27, 29, 90},  // next to wall K, facing along it
 };
 constexpr int kTestGroupCount = sizeof(kTestGroups) / sizeof(kTestGroups[0]);
 
 // Checked when you build: these numbers must fit together.
 static_assert(kEndWallStopCm > kObstacleStopCm, "wall E: the obstacle stop would come first");
-static_assert(kSmallPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 15: the obstacle stop would come first");
-static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 24: the obstacle stop would come first");
+static_assert(kSmallPillarSeenCm > kObstacleStopCm + kLidarToFrontCm, "step 20: the obstacle stop would come first");
+static_assert(kBeamStopCm > kObstacleStopCm + kLidarToFrontCm, "the beam check must come before the obstacle stop");
+static_assert(kBeamWindowM > kBeamStopCm / 100.0f + 0.3f, "the beam window must open before the rover can see the beam");
+static_assert(kPanelAimedCm >= kPanelLeftMinCm && kPanelAimedCm <= kPanelLeftMaxCm, "the aimed panel distance must be inside the panel band");
+static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 29: the obstacle stop would come first");
 static_assert(kTurnPulseOnMs > 1000.0f * kTurnPower / kTurnRampPerSec, "a turn push must reach full power: make kTurnPulseOnMs longer or kTurnRampPerSec bigger");
 
