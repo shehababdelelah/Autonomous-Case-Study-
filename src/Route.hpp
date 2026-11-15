@@ -104,7 +104,7 @@ class Route {
     pillars_ = walls_ = panels_ = 0;
     speed_ = pull_ = totalM_ = 0;
     panelCm_ = aimDeg_ = 0;
-    beamTries_ = 0;
+    beamDone_ = false;
     iWallDoorDeg_ = -1000;
     blocked_ = pausing_ = stepEnded_ = false;
     lastMs_ = in.nowMs;
@@ -132,8 +132,8 @@ class Route {
     if (!in.imuOk) return fail("IMU data lost");
     if (!in.lidarOk) return fail("LiDAR data lost");
     if (pausing_) return pause(in.nowMs, dt);
-    // Steps 14 and 18: standing still in front of something, checking whether it is the beam.
-    if (watching_ && (step_ == TO_RAMP || step_ == CROSS_RAMP)) return watchBeam(in, dt);
+    // Step 14: standing still in front of something, checking whether it is the beam.
+    if (watching_ && step_ == TO_RAMP) return watchBeam(in, dt);
 
     switch (step_) {
       case FORWARD_OUT:
@@ -312,7 +312,7 @@ class Route {
         break;
 
       case CROSS_RAMP:   // 18: over the ramp. The wall of I on the left gives the line for the next steps.
-        if (watching_) break;                   // stopped in front of something: watchBeam() handles it
+        // The beam is not looked for here: it stands at the ramp entrance, which is behind the rover now.
         driveStraight(in, dt);
         if (wallLeft(kIWallMinCm, kIWallMaxCm)) {
           if (found_ == 0) {
@@ -321,9 +321,8 @@ class Route {
           }
           watchSide(in, 270, kIWallRayMaxCm);   // measure its direction while driving past it
         }
-        if (smellsLikeBeam(in)) {
-          watching_ = true;
-        } else if (reached(kRampClearM)) {
+        // After a detour this step starts kBeamToRampM before the ramp, so it drives that much more.
+        if (reached(kRampClearM + (beamDone_ ? kBeamToRampM : 0.0f))) {
           if (found_ == 0) fail("Wall of I not found");
           else {
             iWallDoorDeg_ = lineHeading(true);  // the rover drives along this wall, so it is the door direction
@@ -655,19 +654,20 @@ class Route {
     return in.nowMs - holdSinceMs_ >= holdMs;
   }
 
-  // Something in front, close, and at the place where the beam stands (the ramp entrance). Anything
-  // in front anywhere else is not the beam: the rover then waits for it like any other obstacle.
+  // Something in front, close, and at the place where the beam stands: the last metres of step 14,
+  // just before the ramp entrance. The beam is looked for there and nowhere else, and only once.
+  // Anything in front at any other place is not the beam, so the rover waits for it like any
+  // other obstacle.
   bool smellsLikeBeam(const Input& in) {
-    const bool place = step_ == TO_RAMP ? stepM_ >= kPanelToRampM - kBeamWindowM
-                                        : stepM_ <= kBeamUntilM;
+    const bool place = !beamDone_ && stepM_ >= kPanelToRampM - kBeamWindowM;
     return smallFilter_.update(place && somethingFront(kBeamStopCm), in.nowMs);
   }
 
-  // Steps 14 and 18: the rover stands in front of something. If it is the beam, it steps around it.
+  // Step 14 only: the rover stands in front of something. If it is the beam, it steps around it.
   void watchBeam(const Input& in, float dt) {
     if (watchFront(in, dt, kBeamStopCm, kBeamHoldMs, kBeamMinHits, kBeamMaxHits)) {
-      if (++beamTries_ > kBeamMaxTries) fail("The beam is still in the way");
-      else finishStepTo(in.nowMs, BEAM_TURN_LEFT);
+      beamDone_ = true;                              // the beam is passed: never looked for again
+      finishStepTo(in.nowMs, BEAM_TURN_LEFT);
     } else if (watchGone_) {
       watching_ = false;                             // it moved away: drive on
     }
@@ -913,7 +913,7 @@ class Route {
   // Steps 13 to 20
   float panelCm_ = 0;        // how far the panel read on the left (step 13)
   float aimDeg_ = 0;         // how far to aim to the side in step 14, from the panel
-  int beamTries_ = 0;        // how often the rover stepped around the beam in this run
+  bool beamDone_ = false;    // the beam is behind the rover: it is never looked for again
   bool watching_ = false;    // standing still, looking at something in front
   bool watchGone_ = false;   // the thing in front went away by itself
   uint32_t holdSinceMs_ = 0; // since when it stands at the same distance

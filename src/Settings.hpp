@@ -193,10 +193,10 @@ constexpr int kBeamMinHits = 10;                // CHECK: 40 cm at 75 cm fills a
 constexpr int kBeamMaxHits = 50;                // more than this is a wall, not the beam
 constexpr int kFrontMoveCm = 15;                // it may move this much while it is checked
 constexpr float kBeamSideStepM = 0.60f;         // the detour: turn left, this far forward, turn right
-constexpr int kBeamMaxTries = 2;                // after this many detours the run stops
-constexpr float kBeamWindowM = 1.40f;           // step 14: the beam is only believed in the last metres
-                                                // before kPanelToRampM, where the beam stands
-constexpr float kBeamUntilM = 0.80f;            // step 18: ...and only in the first metres of the ramp
+constexpr float kBeamToRampM = 0.60f;           // the rover stops about this far before the beam,
+                                                // so step 18 drives that much more after a detour
+constexpr float kBeamWindowM = 1.40f;           // the beam is only believed in the last metres before
+                                                // kPanelToRampM, where it stands. Step 14 only, once.
 
 // Step 18: over the ramp, with the wall of building I on the left
 constexpr int kIWallMinCm = 190;                // your measure: 260-300. It is wide enough to still
