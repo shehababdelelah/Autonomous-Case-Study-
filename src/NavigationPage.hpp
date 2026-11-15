@@ -101,9 +101,9 @@ async function loadGroups(){
 }
 function view(s){
  if(s.blocked)return ['wait','OBSTACLE','Waiting until the path is clear.'];
- if(s.running)return ['ok','DRIVING',s.step];
- if(s.stepNumber===30)return ['ok','FINISHED','Check the real position with your eyes.'];
- if(s.stepNumber===31)return ['bad','STOPPED BY SAFETY',s.note];
+ if(s.running)return ['ok','DRIVING',s.note&&s.note!=='Driving'?s.step+' - '+s.note:s.step];
+ if(s.stepNumber===25)return ['ok','FINISHED','Check the real position with your eyes.'];
+ if(s.stepNumber===26)return ['bad','STOPPED BY SAFETY',s.note];
  if(!s.roverOk)return ['wait','NOT READY','Start the box first, then restart the rover.'];
  if(!s.imuOk)return ['wait','NOT READY','Waiting for the IMU.'];
  if(!s.lidarOk)return ['wait','NOT READY','No LiDAR data. Check the wiring.'];
