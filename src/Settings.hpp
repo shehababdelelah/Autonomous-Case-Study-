@@ -20,7 +20,7 @@
 // 22 past the end of K, wall G left    23 turn right 90
 // 24 stop at the last pillar: mission finished
 
-constexpr int kLastStep = 24;              // the whole route; a test group can stop earlier
+constexpr int kLastStep = 2;              // the whole route; a test group can stop earlier
 
 // ---- Driving ----
 constexpr float kDriveSpeed = 0.30f;    // was 0.30f: the weak left side needs more power
