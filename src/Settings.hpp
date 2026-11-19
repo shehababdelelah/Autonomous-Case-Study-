@@ -62,20 +62,26 @@ constexpr float kPanelRefEndM = 3.0f;           // look for the panel only this 
 constexpr float kWallERefM = 2.5f;              // step 9: measure wall E over this far, then correct
 
 // ---- Turning: a short curve, not a turn on the spot ----
-constexpr float kTurnPower = 0.18f;//0.50f;             // below this the rover barely turns
-// THE KNOB for the turn: how much forward driving is mixed in. 0 = turn on the spot.
-// 0.50 is all the rover gives, so the forward part is taken away from the INNER side, and a
-// weak inner side cannot break the friction of four wheels. In run 18 the rover stood still
-// with the inner side at 0.34. So go down this list one line at a time, and stop one line
-// before it stops turning cleanly:
-//   power + forward   outer   inner   curve
-//   0.50 + 0.00        0.50    0.50   none, turns on the spot    <-- safe, it worked before
-//   0.48 + 0.02        0.50    0.46   about  5 cm
-//   0.46 + 0.04        0.50    0.42   about 11 cm
-//   0.44 + 0.06        0.50    0.38   about 18 cm
-//   0.42 + 0.08        0.50    0.34   about 25 cm  (run 18: stuck, it did not turn)
-// The two numbers must add up to 0.50 or less.
-constexpr float kTurnForward = 0.30f;
+constexpr float kTurnPower = 0.40f;             // how hard the two sides push against each other
+// THE KNOB for the turn. These two numbers make every turn:
+//     outer wheels = kTurnForward + kTurnPower
+//     inner wheels = kTurnForward - kTurnPower
+// Measured on the rover in run 21 (9.6 deg/s at a wheel difference of 0.36):
+//     radius in metres = 1.26 x kTurnForward / kTurnPower
+//   forward + power   inner   outer   radius   the rover travels   90 deg takes
+//   0.00 + 0.50       -0.50    0.50   0 m      nothing             (runs 19, 20: it stalls)
+//   0.10 + 0.40       -0.30    0.50   0.32 m   0.50 m              4.7 s   <-- now
+//   0.15 + 0.35       -0.20    0.50   0.54 m   0.85 m              5.3 s
+//   0.20 + 0.30       -0.10    0.50   0.84 m   1.32 m              6.2 s
+//   0.25 + 0.25        0.00    0.50   1.26 m   1.98 m              7.4 s
+//   0.30 + 0.18        0.12    0.48   2.10 m   3.30 m              9.4 s   (run 21: too wide)
+// Smaller kTurnForward = shorter curve, but the inner wheels then have to run backwards, and
+// from standing still that is what made the rover stick. kTurnRollMs below takes care of it.
+// Keep the two adding up to 0.50 or less.
+constexpr float kTurnForward = 0.10f;
+// The rolling start: for this long the turn is driven as the widest curve (inner wheels stopped,
+// nothing backwards), so the wheels are moving before the curve tightens. 0 = no rolling start.
+constexpr uint32_t kTurnRollMs = 600;
 constexpr float kTurnPulseDeg = 10.0f;          // 20 optional, was 35.0f: faster turn outdoors
 constexpr uint32_t kTurnPulseOnMs = 400;        // was 100: a longer push breaks the friction
 constexpr float kTurnRampPerSec = 2.5f;         // turn power 0 to 0.5 in 0.2 s (0.5 / 2.5)

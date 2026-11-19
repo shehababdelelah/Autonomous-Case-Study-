@@ -761,16 +761,33 @@ class Route {
     }
     inToleranceSinceMs_ = in.nowMs;                   // the hold time starts when the error is small
 
-    float wanted = kTurnPower;
+    // The two sides always share the same total power. How it is shared decides the curve:
+    // more forward = wider, more turn = shorter.
+    const float total = kTurnPower + kTurnForward;
+    float power = kTurnPower, forward = kTurnForward;
+
+    // A rolling start. For the first kTurnRollMs the power is shared half and half, which stops
+    // the inner wheels but never pushes them backwards, so the rover rolls away easily. Only then
+    // the curve tightens. A wheel that is already turning needs much less force than one that
+    // stands still, and standing still is where every stuck turn began.
+    if (in.nowMs - turnStartMs_ < kTurnRollMs) {
+      power = forward = total / 2;
+    }
+    // Something in front: the rover must not roll on, but it still has to finish the turn, so
+    // the forward part is given to the turn instead of being thrown away.
+    const bool ahead = obstacleInFront();
+    if (ahead) {
+      power = total;
+      forward = 0;
+    }
+    const float wantForward = forward;
+
+    float wanted = power;
     if (fabsf(error) <= kTurnPulseDeg) {
       const uint32_t phase = (in.nowMs - turnStartMs_) % (kTurnPulseOnMs + kTurnPulseOffMs);
       if (phase >= kTurnPulseOnMs) wanted = 0;        // the wait between two pushes
     }
     if (error < 0) wanted = -wanted;                  // + = turn right
-
-    // Turning on the spot cannot drive into anything, so an obstacle never stops the turn.
-    // It only takes the forward part away, and the rover finishes the turn on the spot.
-    const float wantForward = obstacleInFront() ? 0.0f : kTurnForward;
 
     const float change = kTurnRampPerSec * dt;
     spin_ = constrain(wanted, spin_ - change, spin_ + change);   // one small step toward wanted
