@@ -776,7 +776,7 @@ class Route {
     spin_ = constrain(wanted, spin_ - change, spin_ + change);   // one small step toward wanted
     // The same for the forward part: a turn can start while the rover is still driving fast,
     // and then the forward power must come down in a ramp as well, not in one jump.
-    speed_ = constrain(wantForward, speed_ - kRampPerSec * dt, speed_ + kRampPerSec * dt);
+    speed_ = constrain(wantForward, speed_ - change, speed_ + change);
     const float metres = kRealSpeedMps * (speed_ / kDriveSpeed) * dt;
     stepM_ += metres;
     totalM_ += metres;
