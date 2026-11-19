@@ -760,7 +760,6 @@ class Route {
       return standing && in.nowMs - inToleranceSinceMs_ >= kTurnHoldMs;
     }
     inToleranceSinceMs_ = in.nowMs;                   // the hold time starts when the error is small
-    if (waitForObstacle(in, dt)) return false;        // the rover rolls, so it looks ahead
 
     float wanted = kTurnPower;
     if (fabsf(error) <= kTurnPulseDeg) {
@@ -769,11 +768,15 @@ class Route {
     }
     if (error < 0) wanted = -wanted;                  // + = turn right
 
+    // Turning on the spot cannot drive into anything, so an obstacle never stops the turn.
+    // It only takes the forward part away, and the rover finishes the turn on the spot.
+    const float wantForward = obstacleInFront() ? 0.0f : kTurnForward;
+
     const float change = kTurnRampPerSec * dt;
     spin_ = constrain(wanted, spin_ - change, spin_ + change);   // one small step toward wanted
     // The same for the forward part: a turn can start while the rover is still driving fast,
     // and then the forward power must come down in a ramp as well, not in one jump.
-    speed_ = constrain(kTurnForward, speed_ - kRampPerSec * dt, speed_ + kRampPerSec * dt);
+    speed_ = constrain(wantForward, speed_ - kRampPerSec * dt, speed_ + kRampPerSec * dt);
     const float metres = kRealSpeedMps * (speed_ / kDriveSpeed) * dt;
     stepM_ += metres;
     totalM_ += metres;

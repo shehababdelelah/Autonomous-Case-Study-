@@ -21,6 +21,7 @@ public:
 private:
   uint32_t lastFindMs = 0;
 uint32_t lastIdleMs = 0;
+uint32_t lastVoltsMs = 0;   // last time the voltage was asked for while driving
 
 uint8_t stopsLeft = 0;
 bool idleStatus = false;

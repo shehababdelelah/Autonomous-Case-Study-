@@ -11,6 +11,7 @@ static const uint8_t kLostAfterFails = 10;
 static const uint32_t kDeadmanMs = 500;
 static const uint32_t kSearchEveryMs = 2000;
 static const uint32_t kIdleEveryMs = 500;
+static const uint32_t kVoltsEveryMs = 1000;   // while driving: ask for the voltage this often
 
 // Speeds use the range -0.5 to 0.5.
 static const float kMaxSpeed = 0.5f;
@@ -210,6 +211,13 @@ void RoverLink::update() {
         String("{\"T\":1,\"L\":") + String(left, 2) + ",\"R\":" + String(right, 2) + "}";
     _cmd(roverIp, command, nullptr);
     stopsLeft = kStopRepeats;
+
+    // The answer to a drive command holds no voltage, so ask for the rover status now
+    // and then. _cmd() takes the voltage out of any answer. One extra request a second.
+    if (startMs - lastVoltsMs >= kVoltsEveryMs) {
+      lastVoltsMs = startMs;
+      _cmd(roverIp, "{\"T\":130}", nullptr);
+    }
   } else if (stopsLeft > 0) {
     // Repeat the stop until the rover confirms it.
     if (_cmd(roverIp, "{\"T\":1,\"L\":0,\"R\":0}", nullptr) == 200) {

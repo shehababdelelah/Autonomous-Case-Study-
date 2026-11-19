@@ -20,7 +20,7 @@
 // 22 past the end of K, wall G left    23 turn right 90
 // 24 stop at the last pillar: mission finished
 
-constexpr int kLastStep = 24;              // the whole route; a test group can stop earlier
+constexpr int kLastStep = 2;              // the whole route; a test group can stop earlier
 
 // ---- Driving ----
 constexpr float kDriveSpeed = 0.30f;    // was 0.30f: the weak left side needs more power
@@ -62,20 +62,24 @@ constexpr float kPanelRefEndM = 3.0f;           // look for the panel only this 
 constexpr float kWallERefM = 2.5f;              // step 9: measure wall E over this far, then correct
 
 // ---- Turning: a short curve, not a turn on the spot ----
-constexpr float kTurnPower = 0.42f;             // how hard the two sides push against each other
-// THE KNOB for the turn: how much forward driving is mixed into it. 0 = turn on the spot,
-// bigger = a longer curve. The circle the rover drives is about
-//     1.3 x kTurnForward / kTurnPower  metres wide (measured from run 17):
-//   0.00 with power 0.50 -> on the spot, like before
-//   0.08 with power 0.42 -> short curve, about 25 cm      <-- start here
-//   0.15 with power 0.35 -> about 55 cm
-//   0.25 with power 0.25 -> about 130 cm
-// Keep kTurnPower + kTurnForward at 0.50 or below: that is all the rover gives.
-constexpr float kTurnForward = 0.08f;
+constexpr float kTurnPower = 0.18f;//0.50f;             // below this the rover barely turns
+// THE KNOB for the turn: how much forward driving is mixed in. 0 = turn on the spot.
+// 0.50 is all the rover gives, so the forward part is taken away from the INNER side, and a
+// weak inner side cannot break the friction of four wheels. In run 18 the rover stood still
+// with the inner side at 0.34. So go down this list one line at a time, and stop one line
+// before it stops turning cleanly:
+//   power + forward   outer   inner   curve
+//   0.50 + 0.00        0.50    0.50   none, turns on the spot    <-- safe, it worked before
+//   0.48 + 0.02        0.50    0.46   about  5 cm
+//   0.46 + 0.04        0.50    0.42   about 11 cm
+//   0.44 + 0.06        0.50    0.38   about 18 cm
+//   0.42 + 0.08        0.50    0.34   about 25 cm  (run 18: stuck, it did not turn)
+// The two numbers must add up to 0.50 or less.
+constexpr float kTurnForward = 0.30f;
 constexpr float kTurnPulseDeg = 10.0f;          // 20 optional, was 35.0f: faster turn outdoors
-constexpr uint32_t kTurnPulseOnMs = 300;        // was 100: a longer push breaks the friction
+constexpr uint32_t kTurnPulseOnMs = 400;        // was 100: a longer push breaks the friction
 constexpr float kTurnRampPerSec = 2.5f;         // turn power 0 to 0.5 in 0.2 s (0.5 / 2.5)
-constexpr uint32_t kTurnPulseOffMs = 200;       // was 300: shorter wait between pushes
+constexpr uint32_t kTurnPulseOffMs = 250;       // was 300: shorter wait between pushes
 constexpr float kTurnToleranceDeg = 4.0f;       // turn is finished inside this error
 constexpr uint32_t kTurnHoldMs = 300;           // ...for this long
 constexpr uint32_t kTurnTimeoutMs = 15000;      // a curve turn on a tired battery needs about 10 s
