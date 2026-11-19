@@ -61,22 +61,25 @@ constexpr int kPanelRefMaxCm = 220;             // (your measure: about 150)
 constexpr float kPanelRefEndM = 3.0f;           // look for the panel only this far into step 7
 constexpr float kWallERefM = 2.5f;              // step 9: measure wall E over this far, then correct
 
-// ---- Turn on the spot, values from Robot_8 ----
-constexpr float kTurnPower = 0.50f;             // below this the rover barely turns
+// ---- Turning: a short curve, not a turn on the spot ----
+constexpr float kTurnPower = 0.42f;             // how hard the two sides push against each other
+// THE KNOB for the turn: how much forward driving is mixed into it. 0 = turn on the spot,
+// bigger = a longer curve. The circle the rover drives is about
+//     1.3 x kTurnForward / kTurnPower  metres wide (measured from run 17):
+//   0.00 with power 0.50 -> on the spot, like before
+//   0.08 with power 0.42 -> short curve, about 25 cm      <-- start here
+//   0.15 with power 0.35 -> about 55 cm
+//   0.25 with power 0.25 -> about 130 cm
+// Keep kTurnPower + kTurnForward at 0.50 or below: that is all the rover gives.
+constexpr float kTurnForward = 0.08f;
 constexpr float kTurnPulseDeg = 10.0f;          // 20 optional, was 35.0f: faster turn outdoors
 constexpr uint32_t kTurnPulseOnMs = 300;        // was 100: a longer push breaks the friction
 constexpr float kTurnRampPerSec = 2.5f;         // turn power 0 to 0.5 in 0.2 s (0.5 / 2.5)
 constexpr uint32_t kTurnPulseOffMs = 200;       // was 300: shorter wait between pushes
 constexpr float kTurnToleranceDeg = 4.0f;       // turn is finished inside this error
 constexpr uint32_t kTurnHoldMs = 300;           // ...for this long
-constexpr uint32_t kTurnTimeoutMs = 10000;
+constexpr uint32_t kTurnTimeoutMs = 15000;      // a curve turn on a tired battery needs about 10 s
 constexpr float kTurnWrongWayDeg = 115.0f;      // error got bigger: wrong direction
-
-// Turn as a curve (false = the old turn on the spot above)
-constexpr bool kCurveTurns = false;
-constexpr float kTurnSpeed = 0.30f;             // forward part of the power; it ramps up like driving
-constexpr float kTurnSharpness = 0.6f;          // outer side = speed x 1.6, inner side = speed x 0.4
-constexpr float kTurnSlowDeg = 15.0f;           // in the last 15 deg the curve opens up
 
 // ---- LiDAR directions: 0 = front, 90 = right, 180 = back, 270 = left ----
 constexpr int kLidarAngleShift = 180;           // raw LD20 angle + this = rover angle
@@ -88,6 +91,12 @@ constexpr int kLidarToFrontCm = 15;             // MEASURE: LiDAR centre to rove
 constexpr int kFrontConeDeg = 30;               // look this far to each side
 constexpr int kObstacleMinHits = 3;             // directions that must see it
 constexpr uint32_t kClearMs = 1000;             // front must stay clear this long
+// Emergency stop: STOP pressed, a fault, or something in the way. The wheels go down to 0
+// at this rate instead of being cut off, so the gearbox gets no hard kick. 1.0 = 0.5 to 0
+// in half a second. Smaller = softer but it rolls further.
+constexpr float kEStopRampPerSec = 1.0f;        // wheel command per second while braking
+constexpr bool kEStopHardOnSecondStop = true;   // STOP pressed again while braking: 0 at once
+constexpr int kObstacleHardStopCm = 12;         // obstacle closer than this to the rover front: 0 at once
 
 // Wall on the left (buildings B and C)
 constexpr int kWallMaxCm = 200;                 // MEASURE
@@ -257,4 +266,7 @@ static_assert(kSmallPillarSeenCm > kObstacleStopCm + kLidarToFrontCm, "step 15: 
 static_assert(kBeamStopCm > kObstacleStopCm + kLidarToFrontCm, "the beam check must come before the obstacle stop");
 static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 24: the obstacle stop would come first");
 static_assert(kTurnPulseOnMs > 1000.0f * kTurnPower / kTurnRampPerSec, "a turn push must reach full power: make kTurnPulseOnMs longer or kTurnRampPerSec bigger");
+static_assert(kTurnPower + kTurnForward <= 0.5f, "the turn asks the wheels for more than the rover gives: lower kTurnPower or kTurnForward");
+static_assert(kEStopRampPerSec > kRampPerSec, "the emergency stop must brake faster than the normal stop");
+static_assert(kObstacleHardStopCm < kObstacleStopCm, "the hard stop must be closer than the normal obstacle stop");
 
