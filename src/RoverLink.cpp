@@ -76,6 +76,11 @@ int RoverLink::_cmd(uint32_t ipAddress, const String& json, String* reply) {
     const String body = http.getString();
     if (reply != nullptr) *reply = body;
 
+    // The rover answers every command. If the answer holds the battery voltage, keep it.
+    // The body is read anyway, so this costs nothing and works while driving too.
+    const int voltageIndex = body.indexOf("\"v\":");
+    if (voltageIndex >= 0) _voltage = body.substring(voltageIndex + 4).toFloat();
+
     const float roundTripMs = static_cast<float>(millis() - startMs);
     _rttMs = (_rttMs == 0)
         ? roundTripMs
@@ -216,11 +221,9 @@ void RoverLink::update() {
     String reply;
     if (!idleStatus) {
       _cmd(roverIp, "{\"T\":1,\"L\":0,\"R\":0}", nullptr);
-    } else if (_cmd(roverIp, "{\"T\":130}", &reply) == 200) {
-      const int voltageIndex = reply.indexOf("\"v\":");
-      if (voltageIndex >= 0) {
-        _voltage = reply.substring(voltageIndex + 4).toFloat();
-      }
+    } else {
+      // Asks for the rover status. _cmd() takes the voltage out of the answer.
+      _cmd(roverIp, "{\"T\":130}", &reply);
     }
   }
 }

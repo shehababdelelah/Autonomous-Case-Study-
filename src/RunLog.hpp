@@ -19,6 +19,7 @@ class RunLog {
     uint16_t distanceCm, frontCm, leftCm, rightCm;
     uint8_t pillars, walls;
     uint8_t pillarHits, wallHits;       // LiDAR directions that see a pillar / a wall
+    uint16_t volts;                     // battery volts x 100, 0 = not read yet
   };
   static constexpr int kMaxRows = 3000;   // 12.5 minutes at one row every 250 ms
 
@@ -111,7 +112,7 @@ class RunLog {
   static size_t header(char* line, size_t size) {
     const int n = snprintf(line, size,
         "time_s,step,blocked,heading_deg,target_deg,error_deg,left,right,"
-        "distance_m,front_cm,left_cm,right_cm,pillars,walls,pillar_hits,wall_hits,pitch_deg\n");
+        "distance_m,front_cm,left_cm,right_cm,pillars,walls,pillar_hits,wall_hits,pitch_deg,volts\n");
     return n > 0 ? min((size_t)n, size - 1) : 0;
   }
 
@@ -119,11 +120,11 @@ class RunLog {
     float error = (r.target - r.heading) / 10.0f;   // + = must turn right
     while (error > 180.0f) error -= 360.0f;
     while (error <= -180.0f) error += 360.0f;
-    const int n = snprintf(line, size, "%.2f,%u,%u,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u,%u,%u,%.1f\n",
+    const int n = snprintf(line, size, "%.2f,%u,%u,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u,%u,%u,%.1f,%.2f\n",
         r.ms / 1000.0f, r.step, r.blocked, r.heading / 10.0f, r.target / 10.0f, error,
         r.left / 100.0f, r.right / 100.0f, r.distanceCm / 100.0f,
         r.frontCm, r.leftCm, r.rightCm, r.pillars, r.walls, r.pillarHits, r.wallHits,
-        r.pitch / 10.0f);
+        r.pitch / 10.0f, r.volts / 100.0f);
     return n > 0 ? min((size_t)n, size - 1) : 0;
   }
 

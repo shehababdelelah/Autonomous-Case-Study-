@@ -13,7 +13,10 @@
 static constexpr uint32_t kRoutePeriodMs = 50;
 static constexpr uint32_t kPagePeriodMs = 200;
 static constexpr uint32_t kOledPeriodMs = 1000;
-static constexpr uint32_t kLogPeriodMs = 250;   // the log holds 12.5 minutes; the 12-step route takes about 10
+// 250 ms: the log holds 12.5 minutes, enough for the whole route.
+// Set it to 50 to see every route cycle (the turn ramp and the turn pulses), but then
+// the log only holds 2.5 minutes: use it for one test group, not for the whole route.
+static constexpr uint32_t kLogPeriodMs = 250;
 static constexpr uint32_t kMaxImuAgeMs = 200;
 static constexpr uint32_t kMaxLidarAgeMs = 500;
 static constexpr uint32_t kRestartDelayMs = 1000;   // time to stop the rover before a restart
@@ -121,6 +124,7 @@ static void addLogRow(const Route::Input& in, uint32_t runMs) {
   row.walls = route.walls();
   row.pillarHits = route.pillarHits();
   row.wallHits = route.wallHits();
+  row.volts = lroundf(rover.voltage() * 100);
   runLog.add(row);
 }
 
