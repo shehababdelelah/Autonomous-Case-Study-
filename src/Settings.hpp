@@ -251,8 +251,11 @@ constexpr int kKPillarsNeeded = 2;
 constexpr float kAlongKMaxM = 30.0f;            // safety
 
 // Step 22: past the end of wall K, wall G on the left, then stop
-constexpr int kGLeftMinCm = 160;                // your measure: about 180
-constexpr int kGLeftMaxCm = 200;
+// Wall G on the left in step 22. MEASURED in four group 4 runs: 147, 148, 158, 161, 210, 213,
+// 215 cm. The old band 160-200 caught none of them, so the step always failed. It starts just
+// above kFollowWallMaxCm (120), which is where wall K stops counting, so the two cannot overlap.
+constexpr int kGLeftMinCm = 130;
+constexpr int kGLeftMaxCm = 250;
 constexpr float kAfterKWallM = 2.30f;           // stop this far after the end of wall K
 constexpr float kPastKMaxM = 15.0f;             // safety
 
