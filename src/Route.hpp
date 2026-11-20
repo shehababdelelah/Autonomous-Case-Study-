@@ -268,7 +268,12 @@ class Route {
         break;
       }
 
-      case FIND_PANEL:   // 13: the panel on the left. It only says that the ramp comes next.
+      case FIND_PANEL:   // 13: beside the wall of E, and the panel on the left says the ramp comes next
+        // The same wall keeping as step 12, a little further out. If the wall is not there any
+        // more, nothing happens here and the rover simply drives straight on.
+        if (wallLeft(kLidarMinCm, kFollowWallMaxCm)) {
+          keepWallDistance(in, startHeading_, kPanelWallNearCm, kPanelWallFarCm);
+        }
         driveStraight(in, dt);
         if (panelFilter_.update(panelLeft(kPanelLeftMinCm, kPanelLeftMaxCm), in.nowMs)) {
           ++panels_;

@@ -11,7 +11,7 @@
 // 7 drive to wall E      8 turn right 90 at wall E
 // 9 along E to the pillar, +0.8 m      10 turn left 90
 // 11 find the side wall of E           12 along it, then on to the fire hydrant
-// 13 the panel on the left                14 straight on, the wall of I says the ramp is here
+// 13 the panel on the left             14 straight on, the wall of I says the ramp is here
 //                                            (the beam, if it blocks: left, 50 cm, right)
 // 15 straight beside the wall of I, stand still, then stop at the small pillar
 // 16 turn right 90                     17 forward 1.3 m
@@ -20,7 +20,7 @@
 // 22 past the end of K, wall G left    23 turn right 90
 // 24 stop at the last pillar: mission finished
 
-constexpr int kLastStep = 2;              // the whole route; a test group can stop earlier
+constexpr int kLastStep = 24;              // the whole route; a test group can stop earlier
 
 // ---- Driving ----
 constexpr float kDriveSpeed = 0.30f;    // was 0.30f: the weak left side needs more power
@@ -30,9 +30,9 @@ constexpr float kRealSpeedMps = 0.27f;          // MEASURE: real speed at kDrive
 constexpr uint32_t kPauseMs = 1000;             // stop time between two steps
 
 // ---- Route distances, in metres ----
-constexpr float kFirstForwardM =  0.90f;         // or 0.98f, see above was 0.90f, only for this test out of the door
+constexpr float kFirstForwardM =  0.80f;         // or 0.98f, see above was 0.90f, only for this test out of the door
 constexpr float kNoLidarForwardM = 0.10f;        // was 0.50f: pillar 1 is right after the turn
-constexpr float kAfterPillarsM = 1.20f;         // MEASURE: your map label says 6.66 m
+constexpr float kAfterPillarsM = 1.0f;         // MEASURE: your map label says 6.66 m
 constexpr float kCountMaxM = 40.0f;             // stop if the pillars are not found
 constexpr float kToEndMinM = 20.0f;             // MEASURE: right turn to wall E, minus 3 m (0 = off).
                                                 // 20 for now: in run openSee, step 7 drove 25 m and wall E was not reached yet
@@ -75,7 +75,7 @@ constexpr float kTurnTotal = 0.50f;
 //     0.25          0.00    0.50   1.98 m     7.4 s   safest: the inner wheels only stop
 // Smaller = shorter turn, but the inner wheels push further backwards and the rover can stick.
 // Go one line at a time and stop one line before it sticks.
-constexpr float kTurnForward = 0.10f;
+constexpr float kTurnForward = 0.20f;
 // The rolling start: for this long the turn runs as the widest curve (inner wheels stopped), so
 // the wheels are already rolling before the curve tightens. Costs about 7 cm per 300 ms. 0 = off.
 constexpr uint32_t kTurnRollMs = 600;
@@ -141,7 +141,10 @@ constexpr int kPillarsNeeded = 5;
 constexpr int kWallsNeeded = 2;
 
 // End of the first route: wall E in front, no panel needed
-constexpr int kEndWallStopCm = 80;              // stop when wall E is this close to the rover front
+constexpr int kEndWallStopCm = 100;             // stop when wall E is this close to the rover front.
+                                                // Step 9 then drives beside it at this distance, but
+                                                // the curve in step 8 carries the rover closer: MEASURE
+                                                // left_cm at the start of step 9 and correct this.
 constexpr int kEndWallFanDeg = 20;              // look 20 deg to each side: a wall is wide
 constexpr int kEndWallMinHits = 30;             // 30 of the 41 directions
 constexpr uint32_t kEndWallSeenMs = 300;        // must stay seen this long
@@ -191,6 +194,9 @@ constexpr float kESideMaxM = 40.0f;             // safety: stop the run if the w
 
 // ---- Steps 13 to 20: panel, beam, ramp, settle, small pillar ----
 // Step 13: the panel on the left. It only says that the ramp comes next.
+// Step 13 drives beside the wall of E, like step 12 but a little further out.
+constexpr int kPanelWallNearCm = 70;            // keep the wall on the left between these two
+constexpr int kPanelWallFarCm = 80;
 constexpr int kPanelLeftMinCm = 185;            // your measure: 190-250
 constexpr int kPanelLeftMaxCm = 260;
 constexpr float kPanelMaxM = 15.0f;             // safety
@@ -203,9 +209,9 @@ constexpr float kToRampMaxM = 8.0f;             // safety: no wall of I within t
 // The beam at the ramp entrance (your measure: about 40 cm wide, on the right).
 // The rover stops in front of it and looks at it while standing still, so a person is not taken
 // for the beam: the beam keeps the same distance, a person moves or walks away.
-constexpr int kBeamStopCm = 100;                // stop when something in front is this close
+constexpr int kBeamStopCm = 150;                // stop when something in front is this close
 constexpr uint32_t kBeamHoldMs = 1500;          // it must stand at the same distance this long
-constexpr float kBeamSideStepM = 0.50f;         // the detour: turn left, this far forward, turn right
+constexpr float kBeamSideStepM = 1.00f;         // the detour: turn left, this far forward, turn right
 
 // Both front checks (the beam and the small pillar)
 constexpr uint32_t kFrontGoneMs = 500;          // the thing only counts as gone after this long
@@ -230,7 +236,7 @@ constexpr uint32_t kSmallPillarHoldMs = 1500;   // it must stand still this long
 constexpr float kSmallPillarMaxM = 15.0f;       // safety
 
 // Step 17: forward between the turns at the small pillar
-constexpr float kAfterSmallPillarM = 1.30f;     // your measure: 120-140 cm
+constexpr float kAfterSmallPillarM = 1.50f;     // step 17 (your measure was 120-140 cm)
 
 // Step 19: wall G in front, then stop
 constexpr int kGStopCm = 210;                   // your measure: 180-190; it stops about 20 cm closer than this
@@ -266,9 +272,9 @@ struct TestGroup {
 };
 constexpr TestGroup kTestGroups[] = {
   {"B building to E building", 1, 8, 0},                // at the door
-  {"E building to I building", 9, 15, 90},              // at wall E, facing along it
-  {"I building to K building", 16, 21, 0},              // in front of the small pillar
-  {"K building to H building, end of mission", 22, 24, 90},  // next to wall K, facing along it
+  {"E building to I building", 9, 14, 90},              // at wall E, facing along it
+  {"I building to K building", 15, 19, 0},              // beside the wall of I, before the pillar
+  {"K building to H building, end of mission", 20, 24, 0},   // at wall G, before the turn right
 };
 constexpr int kTestGroupCount = sizeof(kTestGroups) / sizeof(kTestGroups[0]);
 
