@@ -674,19 +674,23 @@ class Route {
 
   // ---- Moving ----
   // Stops at once for an obstacle. It stays stopped until the front is clear for kClearMs.
-  // ---- Emergency stop ----
-  // The driving power and the turning power are both brought down to 0 at kEStopRampPerSec
-  // instead of being cut off, which is much easier on the gearbox. hard = true cuts the power
-  // at once, and that is only used when there is no room left to roll.
+  // ---- Braking ----
+  // Driving and turning come down together, keeping the same share, so a turn does not end as
+  // a turn on the spot. change is how much power is taken away in this step.
   // True when the rover stands still.
-  bool eStop(float dt, bool hard) {
-    const float change = hard ? 1000.0f : kEStopRampPerSec * dt;
-    speed_ = max(speed_ - change, 0.0f);
-    spin_ = constrain(0.0f, spin_ - change, spin_ + change);   // one step toward 0
+  bool brake(float change) {
+    const float now = fabsf(speed_) + fabsf(spin_);
+    const float scale = now > change ? (now - change) / now : 0.0f;
+    speed_ *= scale;
+    spin_ *= scale;
     left_ = speed_ + spin_;
     right_ = (speed_ - spin_) * kRightTrim;
     return speed_ == 0 && spin_ == 0;
   }
+
+  // The emergency stop: STOP pressed, a fault, or something in the way. Slower and gentler
+  // than the end of a turn. hard = true cuts the power at once, when there is no room to roll.
+  bool eStop(float dt, bool hard) { return brake(hard ? 1000.0f : kEStopRampPerSec * dt); }
 
   // Something in the way: brake to a stop and wait until the way is free for kClearMs.
   // Closer than kObstacleHardStopCm there is no room to roll, so the power is cut at once.
@@ -737,13 +741,12 @@ class Route {
     return stepM_ + rollM >= targetM;
   }
 
-  // Turns in a short curve. Two powers are added together:
-  //   spin_   the two sides push against each other (kTurnPower), this is what turns the rover
-  //   speed_  a little forward driving (kTurnForward), this is what makes it a curve
-  // kTurnForward = 0 gives the old turn on the spot. Rolling forward a little while turning
-  // scrubs the wheels much less, so the turn also works when the battery is no longer full.
-  // Both powers only move in a ramp, so the gearbox never gets a hard kick.
-  // Near the target the push comes in short pulses, so the rover creeps the last degrees.
+  // ---- One turn ----
+  // A turn always uses the same total power, kTurnTotal. Only the share changes, and the share
+  // is the curve:
+  //     forward part  drives the rover ahead      inner wheels = forward - turn
+  //     turn part     turns it                    outer wheels = forward + turn
+  // kTurnForward = 0 turns on the spot. Bigger = a longer, rounder curve.
   bool turnFinished(const Input& in, float dt) {
     const float error = wrap180(targetHeading_ - in.headingDeg);   // + = turn right
 
@@ -755,45 +758,22 @@ class Route {
       fail("Turn went the wrong way");
       return false;
     }
-    if (fabsf(error) <= kTurnToleranceDeg) {          // on the new direction: brake, then finished
-      const bool standing = eStop(dt, false);
-      return standing && in.nowMs - inToleranceSinceMs_ >= kTurnHoldMs;
-    }
-    inToleranceSinceMs_ = in.nowMs;                   // the hold time starts when the error is small
+    // On the new direction. It brakes at the turn's own rate, not the emergency rate: the
+    // rover is still turning fast here, and a slow brake would carry it past the target.
+    if (fabsf(error) <= kTurnToleranceDeg) return brake(kTurnRampPerSec * dt);
 
-    // The two sides always share the same total power. How it is shared decides the curve:
-    // more forward = wider, more turn = shorter.
-    const float total = kTurnPower + kTurnForward;
-    float power = kTurnPower, forward = kTurnForward;
+    // How much of the power drives forward. Three cases, nothing else.
+    float forward = kTurnForward;
+    if (in.nowMs - turnStartMs_ < kTurnRollMs) forward = kTurnTotal / 2;   // rolling start: the
+                            // widest curve, so the inner wheels only stop and never go backwards
+    if (obstacleInFront()) forward = 0;        // no room ahead: finish the turn on the spot
 
-    // A rolling start. For the first kTurnRollMs the power is shared half and half, which stops
-    // the inner wheels but never pushes them backwards, so the rover rolls away easily. Only then
-    // the curve tightens. A wheel that is already turning needs much less force than one that
-    // stands still, and standing still is where every stuck turn began.
-    if (in.nowMs - turnStartMs_ < kTurnRollMs) {
-      power = forward = total / 2;
-    }
-    // Something in front: the rover must not roll on, but it still has to finish the turn, so
-    // the forward part is given to the turn instead of being thrown away.
-    const bool ahead = obstacleInFront();
-    if (ahead) {
-      power = total;
-      forward = 0;
-    }
-    const float wantForward = forward;
+    // Both parts move in small steps, so the gearbox never gets a kick.
+    const float step = kTurnRampPerSec * dt;
+    const float turn = kTurnTotal - forward;                   // what is left does the turning
+    speed_ = constrain(forward, speed_ - step, speed_ + step);
+    spin_ = constrain(error > 0 ? turn : -turn, spin_ - step, spin_ + step);
 
-    float wanted = power;
-    if (fabsf(error) <= kTurnPulseDeg) {
-      const uint32_t phase = (in.nowMs - turnStartMs_) % (kTurnPulseOnMs + kTurnPulseOffMs);
-      if (phase >= kTurnPulseOnMs) wanted = 0;        // the wait between two pushes
-    }
-    if (error < 0) wanted = -wanted;                  // + = turn right
-
-    const float change = kTurnRampPerSec * dt;
-    spin_ = constrain(wanted, spin_ - change, spin_ + change);   // one small step toward wanted
-    // The same for the forward part: a turn can start while the rover is still driving fast,
-    // and then the forward power must come down in a ramp as well, not in one jump.
-    speed_ = constrain(wantForward, speed_ - change, speed_ + change);
     const float metres = kRealSpeedMps * (speed_ / kDriveSpeed) * dt;
     stepM_ += metres;
     totalM_ += metres;
@@ -809,7 +789,7 @@ class Route {
     phase_ = next;
     phaseM_ = stepM_;
     phaseMs_ = nowMs;
-    turnStartMs_ = inToleranceSinceMs_ = nowMs;
+    turnStartMs_ = nowMs;
     targetHeading_ = targetDeg;
     spin_ = 0;              // every turn starts from standing still
     watchGone_ = false;
@@ -865,7 +845,7 @@ class Route {
 
   void enterStep(Step next, uint32_t nowMs) {
     step_ = next;
-    stepStartMs_ = inToleranceSinceMs_ = headingBadSinceMs_ = nowMs;
+    stepStartMs_ = headingBadSinceMs_ = nowMs;
     stepM_ = 0;
     spin_ = 0;   // every turn starts from standing still
 
@@ -957,5 +937,5 @@ class Route {
   float iWallDoorDeg_ = -1000;   // door direction measured from the wall of I (step 18)
   float settleHeading_ = -1000;  // heading when the rover stopped in step 19
   uint32_t lastMs_ = 0, stepStartMs_ = 0, pauseStartMs_ = 0;
-  uint32_t clearSinceMs_ = 0, inToleranceSinceMs_ = 0, headingBadSinceMs_ = 0;
+  uint32_t clearSinceMs_ = 0, headingBadSinceMs_ = 0;
 };

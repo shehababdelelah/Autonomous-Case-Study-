@@ -61,34 +61,27 @@ constexpr int kPanelRefMaxCm = 220;             // (your measure: about 150)
 constexpr float kPanelRefEndM = 3.0f;           // look for the panel only this far into step 7
 constexpr float kWallERefM = 2.5f;              // step 9: measure wall E over this far, then correct
 
-// ---- Turning: a short curve, not a turn on the spot ----
-constexpr float kTurnPower = 0.40f;             // how hard the two sides push against each other
-// THE KNOB for the turn. These two numbers make every turn:
-//     outer wheels = kTurnForward + kTurnPower
-//     inner wheels = kTurnForward - kTurnPower
-// Measured on the rover in run 21 (9.6 deg/s at a wheel difference of 0.36):
-//     radius in metres = 1.26 x kTurnForward / kTurnPower
-//   forward + power   inner   outer   radius   the rover travels   90 deg takes
-//   0.00 + 0.50       -0.50    0.50   0 m      nothing             (runs 19, 20: it stalls)
-//   0.10 + 0.40       -0.30    0.50   0.32 m   0.50 m              4.7 s   <-- now
-//   0.15 + 0.35       -0.20    0.50   0.54 m   0.85 m              5.3 s
-//   0.20 + 0.30       -0.10    0.50   0.84 m   1.32 m              6.2 s
-//   0.25 + 0.25        0.00    0.50   1.26 m   1.98 m              7.4 s
-//   0.30 + 0.18        0.12    0.48   2.10 m   3.30 m              9.4 s   (run 21: too wide)
-// Smaller kTurnForward = shorter curve, but the inner wheels then have to run backwards, and
-// from standing still that is what made the rover stick. kTurnRollMs below takes care of it.
-// Keep the two adding up to 0.50 or less.
+// ---- Turning ----
+// A turn always uses this much power in total. 0.50 is the most the rover accepts: do not change.
+constexpr float kTurnTotal = 0.50f;
+// THE ONE KNOB. How much of that power drives forward; the rest does the turning.
+// Measured on your rover in run 21:  distance to reach 90 deg = 1.98 x forward / (0.50 - forward)
+//   kTurnForward   inner   outer   distance   time    note
+//     0.00         -0.50    0.50   0 m        --      on the spot: stalls on a half battery
+//     0.05         -0.40    0.50   0.22 m     4.8 s   almost a spin
+//     0.10         -0.30    0.50   0.50 m     5.2 s   <-- now
+//     0.15         -0.20    0.50   0.85 m     5.7 s
+//     0.20         -0.10    0.50   1.32 m     6.2 s
+//     0.25          0.00    0.50   1.98 m     7.4 s   safest: the inner wheels only stop
+// Smaller = shorter turn, but the inner wheels push further backwards and the rover can stick.
+// Go one line at a time and stop one line before it sticks.
 constexpr float kTurnForward = 0.10f;
-// The rolling start: for this long the turn is driven as the widest curve (inner wheels stopped,
-// nothing backwards), so the wheels are moving before the curve tightens. 0 = no rolling start.
+// The rolling start: for this long the turn runs as the widest curve (inner wheels stopped), so
+// the wheels are already rolling before the curve tightens. Costs about 7 cm per 300 ms. 0 = off.
 constexpr uint32_t kTurnRollMs = 600;
-constexpr float kTurnPulseDeg = 10.0f;          // 20 optional, was 35.0f: faster turn outdoors
-constexpr uint32_t kTurnPulseOnMs = 400;        // was 100: a longer push breaks the friction
-constexpr float kTurnRampPerSec = 2.5f;         // turn power 0 to 0.5 in 0.2 s (0.5 / 2.5)
-constexpr uint32_t kTurnPulseOffMs = 250;       // was 300: shorter wait between pushes
-constexpr float kTurnToleranceDeg = 4.0f;       // turn is finished inside this error
-constexpr uint32_t kTurnHoldMs = 300;           // ...for this long
-constexpr uint32_t kTurnTimeoutMs = 15000;      // a curve turn on a tired battery needs about 10 s
+constexpr float kTurnRampPerSec = 2.5f;         // power rises 2.5 per second: 0 to full in 0.2 s
+constexpr float kTurnToleranceDeg = 4.0f;       // the turn is finished inside this error
+constexpr uint32_t kTurnTimeoutMs = 8000;       // longer than this means the rover is stuck
 constexpr float kTurnWrongWayDeg = 115.0f;      // error got bigger: wrong direction
 
 // ---- LiDAR directions: 0 = front, 90 = right, 180 = back, 270 = left ----
@@ -275,8 +268,8 @@ static_assert(kEndWallStopCm > kObstacleStopCm, "wall E: the obstacle stop would
 static_assert(kSmallPillarSeenCm > kObstacleStopCm + kLidarToFrontCm, "step 15: the obstacle stop would come first");
 static_assert(kBeamStopCm > kObstacleStopCm + kLidarToFrontCm, "the beam check must come before the obstacle stop");
 static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 24: the obstacle stop would come first");
-static_assert(kTurnPulseOnMs > 1000.0f * kTurnPower / kTurnRampPerSec, "a turn push must reach full power: make kTurnPulseOnMs longer or kTurnRampPerSec bigger");
-static_assert(kTurnPower + kTurnForward <= 0.5f, "the turn asks the wheels for more than the rover gives: lower kTurnPower or kTurnForward");
+static_assert(kTurnTotal <= 0.5f, "0.50 is the most the rover accepts");
+static_assert(kTurnForward < kTurnTotal, "kTurnForward must leave something for the turning");
 static_assert(kEStopRampPerSec > kRampPerSec, "the emergency stop must brake faster than the normal stop");
 static_assert(kObstacleHardStopCm < kObstacleStopCm, "the hard stop must be closer than the normal obstacle stop");
 
