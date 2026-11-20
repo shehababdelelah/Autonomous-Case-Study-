@@ -79,7 +79,16 @@ constexpr float kTurnForward = 0.10f;
 // The rolling start: for this long the turn runs as the widest curve (inner wheels stopped), so
 // the wheels are already rolling before the curve tightens. Costs about 7 cm per 300 ms. 0 = off.
 constexpr uint32_t kTurnRollMs = 600;
-constexpr float kTurnRampPerSec = 2.5f;         // power rises 2.5 per second: 0 to full in 0.2 s
+constexpr float kTurnRampPerSec = 1.25f;        // power rises 1.25 per second: 0 to full in 0.4 s
+// Easing off before the target, so the rover arrives slowly and the stop is soft.
+constexpr float kTurnSlowDeg = 25.0f;           // start easing off this far before the target
+// How far the power may come down while easing off. 1.0 = no easing at all.
+// MEASURED: at 0.6 the wheels get -0.18 / +0.30 and the rover does not turn at all - it froze
+// for 5.6 s. This rover needs almost full power to rotate, so easing off is switched off.
+constexpr float kTurnSlowPart = 1.0f;
+// The stop at the end of a turn. Faster than the emergency stop on purpose: the rover is still
+// turning fast when it starts, and a slow stop would carry it past the target.
+constexpr float kTurnBrakePerSec = 2.5f;        // full power to 0 in 0.2 s
 constexpr float kTurnToleranceDeg = 4.0f;       // the turn is finished inside this error
 constexpr uint32_t kTurnTimeoutMs = 8000;       // longer than this means the rover is stuck
 constexpr float kTurnWrongWayDeg = 115.0f;      // error got bigger: wrong direction
@@ -121,7 +130,7 @@ constexpr float kWallMaxAngleDeg = 20.0f;       // wall more than this off the p
 // Pillar on the right
 constexpr int kPillarMinCm = 90;           // was 50: a person at 87 cm gave 17 hits
 constexpr int kPillarMaxCm = 180;          // was 250: pillar 1 is at about 120 cm
-constexpr int kEPillarsNeeded = 2; 
+constexpr int kEPillarsNeeded = 1; 
             // count this many pillars along wall E (they are about 4 m apart)
 constexpr int kPillarFanDeg = 8;
 constexpr int kPillarMinHits = 6;          // was 3: one leg of a person gives about 4-5
@@ -270,6 +279,7 @@ static_assert(kBeamStopCm > kObstacleStopCm + kLidarToFrontCm, "the beam check m
 static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 24: the obstacle stop would come first");
 static_assert(kTurnTotal <= 0.5f, "0.50 is the most the rover accepts");
 static_assert(kTurnForward < kTurnTotal, "kTurnForward must leave something for the turning");
+static_assert(kTurnSlowDeg > kTurnToleranceDeg, "the easing must start before the turn is finished");
 static_assert(kEStopRampPerSec > kRampPerSec, "the emergency stop must brake faster than the normal stop");
 static_assert(kObstacleHardStopCm < kObstacleStopCm, "the hard stop must be closer than the normal obstacle stop");
 

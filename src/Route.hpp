@@ -758,19 +758,25 @@ class Route {
       fail("Turn went the wrong way");
       return false;
     }
-    // On the new direction. It brakes at the turn's own rate, not the emergency rate: the
-    // rover is still turning fast here, and a slow brake would carry it past the target.
-    if (fabsf(error) <= kTurnToleranceDeg) return brake(kTurnRampPerSec * dt);
+    // On the new direction. The stop has its own rate: the rover turns fast right up to
+    // here, so a slow stop would carry it past the target and it would have to come back.
+    if (fabsf(error) <= kTurnToleranceDeg) return brake(kTurnBrakePerSec * dt);
+
+    // Easing off. Over the last kTurnSlowDeg the power comes down with the angle that is left,
+    // so the rover arrives slowly and the stop is soft. It never goes under kTurnSlowPart of
+    // the power, or the wheels would be too weak to turn at all.
+    const float ease = max(min(fabsf(error) / kTurnSlowDeg, 1.0f), kTurnSlowPart);
+    const float total = kTurnTotal * ease;
 
     // How much of the power drives forward. Three cases, nothing else.
-    float forward = kTurnForward;
-    if (in.nowMs - turnStartMs_ < kTurnRollMs) forward = kTurnTotal / 2;   // rolling start: the
+    float forward = kTurnForward * ease;
+    if (in.nowMs - turnStartMs_ < kTurnRollMs) forward = total / 2;   // rolling start: the
                             // widest curve, so the inner wheels only stop and never go backwards
     if (obstacleInFront()) forward = 0;        // no room ahead: finish the turn on the spot
 
     // Both parts move in small steps, so the gearbox never gets a kick.
     const float step = kTurnRampPerSec * dt;
-    const float turn = kTurnTotal - forward;                   // what is left does the turning
+    const float turn = total - forward;                        // what is left does the turning
     speed_ = constrain(forward, speed_ - step, speed_ + step);
     spin_ = constrain(error > 0 ? turn : -turn, spin_ - step, spin_ + step);
 
