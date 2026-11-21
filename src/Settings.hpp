@@ -75,7 +75,7 @@ constexpr float kTurnTotal = 0.50f;
 //     0.25          0.00    0.50   1.98 m     7.4 s   safest: the inner wheels only stop
 // Smaller = shorter turn, but the inner wheels push further backwards and the rover can stick.
 // Go one line at a time and stop one line before it sticks.
-constexpr float kTurnForward = 0.20f;
+constexpr float kTurnForward = 0.25f;
 // The rolling start: for this long the turn runs as the widest curve (inner wheels stopped), so
 // the wheels are already rolling before the curve tightens. Costs about 7 cm per 300 ms. 0 = off.
 constexpr uint32_t kTurnRollMs = 600;
@@ -254,7 +254,7 @@ constexpr float kAlongKMaxM = 30.0f;            // safety
 // Wall G on the left in step 22. MEASURED in four group 4 runs: 147, 148, 158, 161, 210, 213,
 // 215 cm. The old band 160-200 caught none of them, so the step always failed. It starts just
 // above kFollowWallMaxCm (120), which is where wall K stops counting, so the two cannot overlap.
-constexpr int kGLeftMinCm = 130;
+constexpr int kGLeftMinCm = 150;
 constexpr int kGLeftMaxCm = 250;
 constexpr float kAfterKWallM = 2.30f;           // stop this far after the end of wall K
 constexpr float kPastKMaxM = 15.0f;             // safety
