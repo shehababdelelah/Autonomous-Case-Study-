@@ -32,13 +32,34 @@ class RunLog {
   };
   static constexpr int kMaxSteps = 40;
 
+  // One line of gps.csv, written once a second while the run is saved.
+  struct GpsRow {
+    uint32_t ms;          // time since Start
+    int32_t lat, lon;     // degrees x 10 000 000 (about 1 cm), 0 = no fix
+    uint8_t sats;
+    uint8_t quality;      // 0 = no fix, 1 = GPS only, 2 = GPS + EGNOS
+    uint8_t hdopX10;      // horizontal dilution of precision x 10
+    int16_t altM;
+  };
+  static constexpr int kMaxGpsRows = 900;   // 15 minutes at one row a second
+
   // About 72 KB. If memory is short, the log stays off and the rover still works.
-  void begin() { rows_ = new (std::nothrow) Row[kMaxRows]; }
+  void begin() {
+    rows_ = new (std::nothrow) Row[kMaxRows];
+    gpsRows_ = new (std::nothrow) GpsRow[kMaxGpsRows];
+  }
   // group: 0 = the whole route, 1-4 = a test group (only used in the file names).
   void clear(int group = 0) {
     count_ = 0;
     steps_ = 0;
+    gpsCount_ = 0;
     group_ = group;
+  }
+
+  void addGps(const GpsRow& row) {
+    if (!gpsRows_ || gpsCount_ >= kMaxGpsRows) return;
+    gpsRows_[gpsCount_] = row;
+    gpsCount_ = gpsCount_ + 1;
   }
   void addStep(const StepTime& step) {
     if (steps_ >= kMaxSteps) return;
@@ -60,6 +81,18 @@ class RunLog {
           return fill(*cursor, out, maxLen);
         });
     response->addHeader("Content-Disposition", fileName("run"));
+    request->send(response);
+  }
+
+  // gps.csv: one line a second. Sent a piece at a time, like run.csv.
+  void sendGps(AsyncWebServerRequest* request) {
+    auto cursor = std::make_shared<GpsCursor>();
+    cursor->rows = gpsCount_;
+    AsyncWebServerResponse* response = request->beginChunkedResponse(
+        "text/csv", [this, cursor](uint8_t* out, size_t maxLen, size_t) -> size_t {
+          return fillGps(*cursor, out, maxLen);
+        });
+    response->addHeader("Content-Disposition", fileName("gps"));
     request->send(response);
   }
 
@@ -128,8 +161,45 @@ class RunLog {
     return n > 0 ? min((size_t)n, size - 1) : 0;
   }
 
+  struct GpsCursor {
+    int rows = 0, next = -1;
+    char line[96];
+    size_t len = 0, sent = 0;
+  };
+
+  size_t fillGps(GpsCursor& c, uint8_t* out, size_t maxLen) {
+    size_t used = 0;
+    while (used < maxLen) {
+      if (c.sent == c.len) {
+        if (c.next >= c.rows) break;
+        c.len = c.next < 0 ? gpsHeader(c.line, sizeof(c.line))
+                           : gpsFormat(gpsRows_[c.next], c.line, sizeof(c.line));
+        c.sent = 0;
+        ++c.next;
+      }
+      const size_t n = min(maxLen - used, c.len - c.sent);
+      memcpy(out + used, c.line + c.sent, n);
+      used += n;
+      c.sent += n;
+    }
+    return used;
+  }
+
+  static size_t gpsHeader(char* line, size_t size) {
+    const int n = snprintf(line, size, "time_s,lat,lon,satellites,fix_quality,hdop,altitude_m\n");
+    return n > 0 ? min((size_t)n, size - 1) : 0;
+  }
+
+  static size_t gpsFormat(const GpsRow& r, char* line, size_t size) {
+    const int n = snprintf(line, size, "%.2f,%.7f,%.7f,%u,%u,%.1f,%d\n",
+        r.ms / 1000.0f, r.lat / 1e7, r.lon / 1e7, r.sats, r.quality, r.hdopX10 / 10.0f, r.altM);
+    return n > 0 ? min((size_t)n, size - 1) : 0;
+  }
+
   Row* rows_ = nullptr;
   volatile int count_ = 0;
+  GpsRow* gpsRows_ = nullptr;
+  volatile int gpsCount_ = 0;
   StepTime stepTimes_[kMaxSteps];
   volatile int steps_ = 0;
   int group_ = 0;

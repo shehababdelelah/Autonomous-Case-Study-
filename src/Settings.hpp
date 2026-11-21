@@ -147,7 +147,7 @@ constexpr int kPillarsNeeded = 5;
 constexpr int kWallsNeeded = 2;
 
 // End of the first route: wall E in front, no panel needed
-constexpr int kEndWallStopCm = 100;             // stop when wall E is this close to the rover front.
+constexpr int kEndWallStopCm = 150;             // stop when wall E is this close to the rover front.
                                                 // Step 9 then drives beside it at this distance, but
                                                 // the curve in step 8 carries the rover closer: MEASURE
                                                 // left_cm at the start of step 9 and correct this.
@@ -290,7 +290,7 @@ constexpr float kAlongKMaxM = 30.0f;            // safety
 // Wall G on the left in step 22. MEASURED in four group 4 runs: 147, 148, 158, 161, 210, 213,
 // 215 cm, and 259-283 in the last run. The old band 160-200 caught none of them. It starts just
 // above kFollowWallMaxCm (120), which is where wall K stops counting, so the two cannot overlap.
-constexpr int kGLeftMinCm = 150;
+constexpr int kGLeftMinCm = 130;
 constexpr int kGLeftMaxCm = 320;
 constexpr float kAfterKWallM = 2.30f;           // stop this far after the end of wall K
 constexpr float kPastKMaxM = 15.0f;             // safety

@@ -49,10 +49,17 @@ button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;
 <section class="card idle" id="status"><p id="title">Connecting</p><p id="why">Waiting for the box.</p></section>
 <label class="check"><input type="checkbox" id="record" checked>Save this run as CSV</label>
 <div class="buttons"><button id="start" disabled>Start</button><button id="stop">STOP</button></div>
-<p><a href="/log.csv">Download the last run (CSV)</a> &middot; <a href="/steps.csv">Step times (CSV)</a> &middot; <a href="/mission">Mission mode</a></p>
+<p><a href="/log.csv">Download the last run (CSV)</a> &middot; <a href="/steps.csv">Step times (CSV)</a> &middot; <a href="/gps.csv">GPS (CSV)</a> &middot; <a href="/mission">Mission mode</a></p>
 <section class="card"><h2>Test one group of steps (always saved as CSV)</h2>
  <p class="hint">Put the rover where the first step of the group starts, facing the way that step drives.</p>
  <div id="groups"><p class="hint">Loading the groups...</p></div>
+</section>
+<section class="card"><h2>GPS and clock</h2>
+ <div class="row"><span>Date and time</span><span id="clock">-</span></div>
+ <div class="row"><span>GPS</span><span id="gpsOn">-</span></div>
+ <div class="row"><span>Fix / satellites</span><span id="gpsFix">-</span></div>
+ <div class="row"><span>Position</span><span id="gpsPos">-</span></div>
+ <div class="buttons"><button id="gps">GPS On / Off</button></div>
 </section>
 <section class="card"><h2>Checks</h2>
  <div class="row"><span>Rover link</span><span id="roverOk">-</span></div>
@@ -87,6 +94,7 @@ const say=(id,text)=>{$(id).textContent=text;};
 const cm=v=>v>0?v+' cm':'No reading';
 function check(id,ok){say(id,ok?'OK':'NOT OK');$(id).className=ok?'yes':'no';}
 let groups=[];
+let gpsOn=false;
 const groupText=g=>'Steps '+g.first+'-'+g.last+': '+g.name;
 async function loadGroups(){
  try{groups=await (await fetch('/api/groups',{cache:'no-store'})).json();}
@@ -124,6 +132,12 @@ function show(s){
  say('wheels',s.left.toFixed(2)+' / '+s.right.toFixed(2));
  say('heading',s.headingDeg.toFixed(1)+' / '+s.targetDeg.toFixed(1));
  say('battery',s.voltage>0?s.voltage.toFixed(1)+' V':'-');
+ gpsOn=s.gpsOn;
+ say('clock',s.clock);
+ say('gpsOn',gpsOn?'On':'Off');$('gpsOn').className=gpsOn?'yes':'no';
+ say('gpsFix',!gpsOn?'-':(s.gpsFix?'fix':'no fix')+', '+s.satellites+' satellites'+
+  (s.fixQuality==2?' (EGNOS)':''));
+ say('gpsPos',s.gpsFix?s.latDeg.toFixed(6)+', '+s.lonDeg.toFixed(6):'-');
 }
 function offline(){
  $('status').className='card bad';say('title','NO CONNECTION');
@@ -140,6 +154,7 @@ try{$('record').checked=localStorage.getItem('record')!=='0';}catch(e){}
 $('record').onchange=()=>{try{localStorage.setItem('record',$('record').checked?'1':'0');}catch(e){}};
 $('start').onclick=()=>fetch('/api/start?log='+($('record').checked?1:0),{method:'POST'});
 $('stop').onclick=()=>fetch('/api/stop',{method:'POST'});
+$('gps').onclick=()=>fetch('/api/gps?on='+(gpsOn?0:1),{method:'POST'});
 $('restart').onclick=()=>{
  if(confirm('Restart the box? The rover stops and the run log (CSV) is deleted. Download it first.'))
   fetch('/api/restart',{method:'POST'});

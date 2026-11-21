@@ -1,4 +1,5 @@
 #include "GpsDriver.hpp"
+#include <sys/time.h>
 
 namespace {
 // UBX-CFG-SBAS (class 0x06, id 0x16): SBAS on, use it for ranging and corrections,
@@ -100,4 +101,73 @@ const char* GpsDriver::egnosText() const {
 
 const char* GpsDriver::fixQualityText(uint8_t q) {
   return q == 2 ? "GPS + EGNOS" : q == 1 ? "GPS only" : "no fix";
+}
+
+void GpsDriver::end() {
+  Serial2.end();
+  _egnos = EgnosState::Off;
+}
+
+// ---- Rtc ----
+
+namespace {
+// Days from 1970-01-01 to this date, for any year. Handles leap years and centuries.
+long daysFromCivil(int y, int m, int d) {
+  y -= m <= 2;
+  const long era = (y >= 0 ? y : y - 399) / 400;
+  const long yoe = y - era * 400;                       // 0 to 399
+  const long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097L + doe - 719468L;
+}
+}  // namespace
+
+bool Rtc::setFromGps(uint32_t utcDate, uint32_t utcTime) {
+  if (utcDate == 0 || utcTime == 0) return false;
+  if (set_ && millis() - lastSyncMs_ < kResyncMs) return false;   // the GPS repeats every second
+
+  const int day = utcDate / 10000;             // ddmmyy
+  const int month = (utcDate / 100) % 100;
+  const int year = 2000 + utcDate % 100;
+  const int hour = utcTime / 1000000;          // hhmmsscc
+  const int minute = (utcTime / 10000) % 100;
+  const int second = (utcTime / 100) % 100;
+  if (day < 1 || day > 31 || month < 1 || month > 12 || hour > 23) return false;
+
+  // Seconds since 1970 for a date in UTC. mktime() cannot be used: it reads the parts as local
+  // time, and the GPS gives UTC.
+  const time_t utc = daysFromCivil(year, month, day) * 86400L + hour * 3600 + minute * 60 + second;
+  if (utc <= 0) return false;
+  const timeval tv = {utc, 0};
+  settimeofday(&tv, nullptr);
+  set_ = true;
+  lastSyncMs_ = millis();
+  return true;
+}
+
+void Rtc::parts(struct tm& t) const {
+  const time_t local = time(nullptr) + kTimeZoneHours * 3600;
+  gmtime_r(&local, &t);                        // the offset is already in, so gmtime_r
+}
+
+void Rtc::text(char* out, size_t size) const {
+  if (!set_) { snprintf(out, size, "no time yet"); return; }
+  struct tm t;
+  parts(t);
+  snprintf(out, size, "%02d.%02d.%04d %02d:%02d:%02d",
+           t.tm_mday, t.tm_mon + 1, t.tm_year + 1900, t.tm_hour, t.tm_min, t.tm_sec);
+}
+
+void Rtc::dateText(char* out, size_t size) const {
+  if (!set_) { snprintf(out, size, "no date"); return; }
+  struct tm t;
+  parts(t);
+  snprintf(out, size, "%02d.%02d.%04d", t.tm_mday, t.tm_mon + 1, t.tm_year + 1900);
+}
+
+void Rtc::timeText(char* out, size_t size) const {
+  if (!set_) { snprintf(out, size, "--:--:--"); return; }
+  struct tm t;
+  parts(t);
+  snprintf(out, size, "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
 }

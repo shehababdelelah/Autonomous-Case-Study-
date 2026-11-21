@@ -20,6 +20,11 @@ class WEBpage {
     int pillars = 0, walls = 0, panels = 0;
     float headingDeg = 0, targetDeg = 0;
     int frontCm = 0, rightCm = 0, backCm = 0, leftCm = 0;
+    // GPS and the clock
+    bool gpsOn = false, gpsFix = false;
+    int satellites = 0, fixQuality = 0;
+    double latDeg = 0, lonDeg = 0;
+    char clock[24] = "no time yet";   // from the RTC once the GPS has set it
   };
 
   void begin();
@@ -27,6 +32,7 @@ class WEBpage {
   Command takeCommand();
   bool logWanted() const { return logWanted_; }   // the CSV choice sent with the last Start
   int groupWanted() const { return group_; }      // 0 = the whole route, 1-4 = a test group
+  bool gpsWanted() const { return gpsOn_; }       // the GPS On / Off button
 
  private:
  String statusJson();
@@ -38,4 +44,5 @@ class WEBpage {
   volatile bool startPending_ = false, stopPending_ = false, restartPending_ = false;
   volatile bool logWanted_ = true;
   volatile int group_ = 0;
+  volatile bool gpsOn_ = false;
 };

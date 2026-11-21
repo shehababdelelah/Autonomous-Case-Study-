@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include "BNO055Sensor.hpp"
+#include "GpsDriver.hpp"
 #include "LidarScan.h"
 #include "Route.hpp"
 #include "RoverLink.hpp"
@@ -17,6 +18,7 @@ static constexpr uint32_t kOledPeriodMs = 1000;
 // Set it to 50 to see every route cycle (the turn ramp and the turn pulses), but then
 // the log only holds 2.5 minutes: use it for one test group, not for the whole route.
 static constexpr uint32_t kLogPeriodMs = 250;
+static constexpr uint32_t kGpsLogPeriodMs = 1000;   // the GPS gives one position a second
 static constexpr uint32_t kMaxImuAgeMs = 200;
 static constexpr uint32_t kMaxLidarAgeMs = 500;
 static constexpr uint32_t kRestartDelayMs = 1000;   // time to stop the rover before a restart
@@ -28,6 +30,18 @@ WEBpage web;
 LCDDisplay oled;
 bool oledReady = false;
 RunLog runLog;
+GpsDriver gps;
+Rtc rtc;                 // the clock in the ESP32, set from the GPS
+// The GPS task writes this, loop() reads it. The copy is short, so a critical section is enough.
+static portMUX_TYPE gpsMux = portMUX_INITIALIZER_UNLOCKED;
+static GpsData gpsLatest{};
+
+static GpsData gpsSnapshot() {
+  portENTER_CRITICAL(&gpsMux);
+  const GpsData d = gpsLatest;
+  portEXIT_CRITICAL(&gpsMux);
+  return d;
+}
 static bool logThisRun = true;   // chosen on the page before Start
 static int runGroup = 0;         // 0 = the whole route, 1-4 = a test group (Settings.hpp)
 
@@ -41,6 +55,28 @@ void imuTask(void* parameter) {
   for (;;) {
     updateBNO055();
     vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(20));
+  }
+}
+
+// Reads the GPS and keeps the clock right. The GPS only runs while it is switched on with
+// the GPS On / Off button on the page; switched off, Serial2 is closed and nothing is read.
+void gpsTask(void* parameter) {
+  bool running = false;
+  for (;;) {
+    const bool wanted = web.gpsWanted();
+    if (wanted != running) {
+      if (wanted) gps.begin(); else gps.end();
+      running = wanted;
+    }
+    if (running) {
+      gps.poll();                            // never blocks
+      const GpsData d = gps.data();
+      rtc.setFromGps(d.utcDate, d.utcTime);  // sets the clock once, then every 10 minutes
+      portENTER_CRITICAL(&gpsMux);
+      gpsLatest = d;
+      portEXIT_CRITICAL(&gpsMux);
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
@@ -73,7 +109,7 @@ static void startWiFi() {
   Serial.println(WiFi.softAPIP());
 }
 
-// Line 1: rover name, line 2: web page address, line 3: rover battery.
+// Line 1: rover name, line 2: date and time from the clock, line 3: rover battery.
 static void updateOled() {
   char battery[21];
   if (!rover.connected()) {
@@ -83,7 +119,9 @@ static void updateOled() {
   } else {
     snprintf(battery, sizeof(battery), "Battery: waiting");
   }
-  oled.show("Rover 8", WiFi.softAPIP().toString().c_str(), battery);
+  char clock[24];
+  rtc.text(clock, sizeof(clock));
+  oled.show("Rover 8", clock, battery);
 }
 
 void setup() {
@@ -103,6 +141,7 @@ void setup() {
   runLog.begin();
   xTaskCreatePinnedToCore(imuTask, "imu", 4096, nullptr, 3, nullptr, 1);
   xTaskCreatePinnedToCore(roverLinkTask, "roverLink", 6144, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(gpsTask, "gps", 4096, nullptr, 1, nullptr, 1);
 }
 
 // One row of the run log: what the rover measured and what it asked the wheels to do.
@@ -129,6 +168,20 @@ static void addLogRow(const Route::Input& in, uint32_t runMs) {
 }
 
 
+// One line of gps.csv: where the rover was and how good the position is.
+static void addGpsRow(uint32_t runMs) {
+  const GpsData d = gpsSnapshot();
+  RunLog::GpsRow row{};
+  row.ms = runMs;
+  row.lat = (int32_t)llround(d.latDeg * 1e7);
+  row.lon = (int32_t)llround(d.lonDeg * 1e7);
+  row.sats = d.satellites;
+  row.quality = d.fixQuality;
+  row.hdopX10 = (uint8_t)min(255.0f, d.hdop * 10.0f);
+  row.altM = (int16_t)lroundf(d.altitudeM);
+  runLog.addGps(row);
+}
+
 static void publishStatus(const Route::Input& in) {
   WEBpage::Status s;
   s.running = route.running();
@@ -154,11 +207,20 @@ static void publishStatus(const Route::Input& in) {
   s.backCm = lidar.distanceMm(180) / 10;
   s.leftCm = lidar.distanceMm(270) / 10;
   s.voltage = rover.voltage();
+  const GpsData g = gpsSnapshot();
+  s.gpsOn = web.gpsWanted();
+  s.gpsFix = g.fix;
+  s.satellites = g.satellites;
+  s.fixQuality = g.fixQuality;
+  s.latDeg = g.latDeg;
+  s.lonDeg = g.lonDeg;
+  rtc.text(s.clock, sizeof(s.clock));
   web.publish(s);
 }
 
 void loop() {
   static uint32_t lastRouteMs = 0, lastPageMs = 0, lastLogMs = 0, runStartMs = 0;
+  static uint32_t lastGpsLogMs = 0;
   static uint32_t lastPackets = 0, lastPacketMs = 0;
   static uint32_t restartAtMs = 0;   // 0 = no restart asked
 
@@ -219,6 +281,11 @@ void loop() {
     if (logThisRun && route.running() && nowMs - lastLogMs >= kLogPeriodMs) {
       lastLogMs = nowMs;
       addLogRow(in, nowMs - runStartMs);
+    }
+    // gps.csv: the same Save-this-run choice, but only one row a second.
+    if (logThisRun && route.running() && nowMs - lastGpsLogMs >= kGpsLogPeriodMs) {
+      lastGpsLogMs = nowMs;
+      addGpsRow(nowMs - runStartMs);
     }
 
     if (nowMs - lastPageMs >= kPagePeriodMs) {

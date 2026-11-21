@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <TinyGPSPlus.h>
+#include <time.h>
 
 // GpsDriver - GY-GPS6MV2 (u-blox NEO-6M) on the CAS box.
 //   Wiring (from the course code GpsManager.cpp):
@@ -54,6 +55,9 @@ public:
   // Opens Serial2 and sends the EGNOS command. Does not wait: the answer is read in poll().
   void begin(bool enableEgnos = true);
 
+  // Closes Serial2. Used when the GPS is switched off on the page.
+  void end();
+
   // Reads every waiting byte from the GPS. Call it every loop pass. Never blocks.
   void poll();
 
@@ -79,4 +83,30 @@ private:
   uint32_t _sentMs = 0;
   uint8_t _ackPos = 0;
   uint8_t _nakPos = 0;
+};
+
+// ---- Rtc: the clock inside the ESP32, set from the GPS ----
+// The ESP32 has its own clock. Once the GPS has given it a date and a time, the box reads the
+// time from here and not from the GPS, so the time keeps running when the GPS is switched off
+// or loses its fix. It is lost when the power is cut, and set again at the next GPS fix.
+// The clock itself keeps UTC; kTimeZoneHours is added only when the time is written out.
+class Rtc {
+ public:
+  static constexpr int kTimeZoneHours = 1;          // Germany in winter. Summer time: 2.
+  static constexpr uint32_t kResyncMs = 600000;     // set it again from the GPS every 10 minutes
+
+  // utcDate = ddmmyy and utcTime = hhmmsscc, exactly as GpsData carries them.
+  // Returns true the moment the clock was set or re-set.
+  bool setFromGps(uint32_t utcDate, uint32_t utcTime);
+
+  bool isSet() const { return set_; }
+  void text(char* out, size_t size) const;   // "21.11.2026 14:03:12", or "no time yet"
+  void dateText(char* out, size_t size) const;   // "21.11.2026"
+  void timeText(char* out, size_t size) const;   // "14:03:12"
+
+ private:
+  void parts(struct tm& t) const;
+
+  bool set_ = false;
+  uint32_t lastSyncMs_ = 0;
 };
