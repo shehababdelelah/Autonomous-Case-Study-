@@ -180,6 +180,7 @@ void loop() {
     in.nowMs = nowMs;
     in.headingDeg = imu.headingDeg;
     in.pitchDeg = imu.pitchDeg;
+    in.rollDeg = imu.rollDeg;
     in.imuOk = hasImu && nowMs - imu.sampleMs <= kMaxImuAgeMs && isfinite(imu.headingDeg);
     in.roverOk = rover.connected();
     in.lidarOk = nowMs - lastPacketMs <= kMaxLidarAgeMs;

@@ -109,6 +109,10 @@ constexpr uint32_t kClearMs = 1000;             // front must stay clear this lo
 // at this rate instead of being cut off, so the gearbox gets no hard kick. 1.0 = 0.5 to 0
 // in half a second. Smaller = softer but it rolls further.
 constexpr float kEStopRampPerSec = 1.0f;        // wheel command per second while braking
+// Picked up off the ground: leaning more than this in pitch or roll. On the ground the
+// rover stays inside a few degrees, and the ramp measured 8, so 25 is well clear.
+constexpr float kLiftedDeg = 25.0f;
+constexpr uint32_t kBackDownMs = 1000;          // flat again this long = back on the ground
 constexpr bool kEStopHardOnSecondStop = true;   // STOP pressed again while braking: 0 at once
 constexpr int kObstacleHardStopCm = 12;         // obstacle closer than this to the rover front: 0 at once
 
@@ -174,6 +178,9 @@ constexpr int kFarPillarMinHits = 4;            // steps 9, 21: a pillar 2-2.5 m
 constexpr int kFollowWallMaxCm = 120;           // steps 12, 21, 22: the wall we follow counts as there
 
 // Step 9: along wall E until a pillar on the right, then a little more
+// Step 9 drives beside wall E on the left, at the distance step 7 stopped at.
+constexpr int kEWallNearCm = 95;                // keep wall E between these two
+constexpr int kEWallFarCm = 105;
 constexpr int kEPillarMinCm = 165;              // your measure: about 220
 constexpr int kEPillarMaxCm = 205;
 constexpr float kAlongEMinM = 0.0f;             // look for the pillar only after this far (0 = at once)
@@ -204,16 +211,35 @@ constexpr int kPanelLeftMaxCm = 260;
 constexpr float kPanelMaxM = 15.0f;             // safety
 
 // Step 14: straight on until the wall of I appears on the left: then the rover is at the ramp.
-constexpr float kIWallSeenM = 2.00f;            // the wall of I must stay in sight this far, so the
+// Step 14 drives beside the wall of I, like steps 9, 12 and 21 do with their walls.
+constexpr int kIWallNearCm = 200;               // keep the wall of I between these two
+constexpr int kIWallFarCm = 230;
+constexpr int kIWallCatchCm = 250;              // ...and look for it out to here
+// Your measure: there is no wall of I in the first 3.5 m after the panel. It starts after
+// the beam, or on the ramp. Before that the panel is the only thing on the left, and the
+// rover would follow it, so the alignment stays switched off until here.
+constexpr float kIWallFromM = 3.50f;
+// The ramp is felt with the IMU, not seen. It only says step 14 is finished: nothing fails
+// if it is never felt, the step then ends on kToRampMaxM instead.
+constexpr float kRampPitchDeg = 4.0f;           // the nose tilts this much = on the ramp
+constexpr float kRampFlatDeg = 2.0f;            // back inside this = level again
+constexpr uint32_t kRampFlatMs = 1000;          // ...for this long = the ramp is finished
+constexpr float kIWallSeenM = 2.00f;            // step 15 only. The wall of I must stay in sight
                                                 // short panel is not taken for it
-constexpr float kToRampMaxM = 8.0f;             // safety: no wall of I within this far
+constexpr float kToRampMaxM = 12.0f;            // panel to the end of the ramp. Not a fault any
+                                                // more: step 14 just ends here if the ramp was
+                                                // never felt. Ramp about 8 m + the way to it.
 
 // The beam at the ramp entrance (your measure: about 40 cm wide, on the right).
 // The rover stops in front of it and looks at it while standing still, so a person is not taken
 // for the beam: the beam keeps the same distance, a person moves or walks away.
-constexpr int kBeamStopCm = 150;                // stop when something in front is this close
+constexpr int kBeamStopCm = 200;                // stop when something in front is this close
 constexpr uint32_t kBeamHoldMs = 1500;          // it must stand at the same distance this long
-constexpr float kBeamSideStepM = 1.00f;         // the detour: turn left, this far forward, turn right
+// Going round the beam, without any turn on the spot: the rover aims kBeamAvoidDeg to the
+// left until it has moved kBeamSideStepM sideways, then it straightens up again. Seeing the
+// beam at all means the rover drifted right of the ramp, so this is a small correction.
+constexpr float kBeamSideStepM = 0.60f;         // how far to the left it has to move
+constexpr float kBeamAvoidDeg = 40.0f;          // how far it aims left while doing it
 
 // Both front checks (the beam and the small pillar)
 constexpr uint32_t kFrontGoneMs = 500;          // the thing only counts as gone after this long

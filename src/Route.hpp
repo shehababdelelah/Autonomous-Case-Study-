@@ -85,13 +85,14 @@ class Route {
 
   // Steps 14 and 15 do several things one after the other. Each one is a phase: it has its own
   // target heading, its own start time and its own start distance. The page shows which one runs.
-  enum Phase : uint8_t { P_DRIVE, P_WATCH, P_TURN_LEFT, P_SIDESTEP, P_TURN_BACK, P_SETTLE, P_PILLAR };
+  enum Phase : uint8_t { P_DRIVE, P_WATCH, P_SIDESTEP, P_TURN_BACK, P_SETTLE, P_PILLAR };
 
 
   struct Input {
     uint32_t nowMs;
     float headingDeg;   // 0 to 360, clockwise is positive
-    float pitchDeg;     // nose up or down. Only written to the CSV for now, to measure the ramp
+    float pitchDeg;     // nose up or down
+    float rollDeg;      // leaning left or right
     bool imuOk, roverOk, lidarOk;
   };
 
@@ -108,7 +109,7 @@ class Route {
     speed_ = pull_ = totalM_ = 0;
     beamDone_ = false;
     iWallDoorDeg_ = -1000;
-    blocked_ = pausing_ = stepEnded_ = hardStop_ = false;
+    blocked_ = pausing_ = stepEnded_ = hardStop_ = lifted_ = false;
     lastMs_ = in.nowMs;
     enterStep(static_cast<Step>(firstStep), in.nowMs);
     note_ = "Driving";
@@ -133,6 +134,7 @@ class Route {
       eStop(dt, hardStop_);   // STOP, a fault or the end: brake, do not cut the power
       return;
     }
+    if (liftedOffGround(in, dt)) return;   // in somebody's hands: wait, keep the step as it is
     if (!in.roverOk) return fail("Rover link lost");
     if (!in.imuOk) return fail("IMU data lost");
     if (!in.lidarOk) return fail("LiDAR data lost");
@@ -209,6 +211,10 @@ class Route {
         break;
 
        case FORWARD_ALONG_E: {   // 9: along wall E until a pillar on the right, then kAfterEPillarM more
+        // Keep the distance to wall E on the left, like steps 4, 12, 21 and 22 do with their walls.
+        if (wallLeft(kLidarMinCm, kFollowWallMaxCm)) {
+          keepWallDistance(in, startHeading_, kEWallNearCm, kEWallFarCm);
+        }
         driveStraight(in, dt);
         if (wallLeft(kLidarMinCm, kFollowWallMaxCm)) lastWallM_ = stepM_;   // wall E is still beside the rover
         if (kUseWallERef && !refDone_) {
@@ -288,53 +294,53 @@ class Route {
           case P_WATCH:   // standing still in front of something: is it the beam?
             if (watchFront(in, dt, kFrontConeDeg, kBeamStopCm, kBeamHoldMs)) {
               beamDone_ = true;            // the beam is passed: it is never looked for again
-              note_ = "Beam: turning left";
-              startPhase(P_TURN_LEFT, in.nowMs, wrap360(startHeading_ - 90.0f));
+              note_ = "Beam: a little to the left";
+              startPhase(P_SIDESTEP, in.nowMs, wrap360(startHeading_ - kBeamAvoidDeg));
             } else if (watchGone_) {
               note_ = "Forward to the ramp";
               startPhase(P_DRIVE, in.nowMs, startHeading_);   // it moved away, or it is not the beam
             }
             break;
 
-          case P_TURN_LEFT:
-            if (turnFinished(in, dt)) {
-              note_ = "Beam: step to the left";
-              startPhase(P_SIDESTEP, in.nowMs, targetHeading_);
-            }
-            break;
-
-          case P_SIDESTEP:
+          case P_SIDESTEP: {
+            // Aiming kBeamAvoidDeg to the left. The rover only has to move kBeamSideStepM
+            // sideways, so it drives that much divided by the sine of the angle.
             driveStraight(in, dt);
-            if (reached(phaseM_ + kBeamSideStepM)) {
-              note_ = "Beam: turning back";
+            const float diagonalM = kBeamSideStepM / sinf(kBeamAvoidDeg * DEG_TO_RAD);
+            if (stepM_ - phaseM_ >= diagonalM) {
+              note_ = "Beam: straightening up";
               startPhase(P_TURN_BACK, in.nowMs, startHeading_);
             }
             break;
+          }
 
           case P_TURN_BACK:
-            if (turnFinished(in, dt)) {
-              foundAtM_ = -1;              // the wall of I has to be seen again from here
-              note_ = "Forward to the ramp";
+            // Back to the old direction. It keeps rolling: no turn on the spot, no stop.
+            driveStraight(in, dt);
+            if (fabsf(wrap180(startHeading_ - in.headingDeg)) <= kTurnToleranceDeg) {
+              note_ = "Forward over the ramp";
               startPhase(P_DRIVE, in.nowMs, startHeading_);
             }
             break;
 
-          default: {   // P_DRIVE: straight on, looking left for the wall of I and ahead for the beam
+          default: {   // P_DRIVE: over the ramp, beside the wall of I, watching ahead for the beam
+            // Keep the distance to the wall of I on the left, the same as steps 9, 12 and 21 do
+            // with their walls. It is caught from further away: the wall of I is about 2 m off.
+            // Not in the first kIWallFromM: there is no wall of I there yet, but the panel from
+            // step 13 is still on the left at about the same distance and would be followed.
+            if (stepM_ >= kIWallFromM && wallLeft(kLidarMinCm, kIWallCatchCm)) {
+              keepWallDistance(in, startHeading_, kIWallNearCm, kIWallFarCm);
+            }
             driveStraight(in, dt);
-            // The wall of I must stay in sight for kIWallSeenM. That is how it is told from the panel,
-            // which reads almost the same distance but is only a metre long. By the time those metres
-            // are driven the rover is on the ramp and past the beam.
-            const bool iWall = wallLeft(kIWallMinCm, kIWallMaxCm);
-            if (!iWall) foundAtM_ = -1;
-            else if (foundAtM_ < 0) foundAtM_ = stepM_;
-            if (foundAtM_ >= 0 && stepM_ - foundAtM_ >= kIWallSeenM) {
-              ++walls_;                    // the wall of I: the rover has reached the ramp
-              finishStep(in.nowMs);
+
+            if (rampFinished(in)) {
+              finishStep(in.nowMs);                    // the nose went up and came back level
             } else if (!beamDone_ && smallFilter_.update(somethingFront(kBeamStopCm, kFrontConeDeg), in.nowMs)) {
               note_ = "Checking the beam";
               startPhase(P_WATCH, in.nowMs, targetHeading_);
             } else if (stepM_ >= kToRampMaxM) {
-              fail("Ramp not found");
+              note_ = "Ramp not felt, going on";
+              finishStep(in.nowMs);                    // the ramp is only an indication, not a fault
             }
             break;
           }
@@ -681,6 +687,56 @@ class Route {
 
   // ---- Moving ----
   // Stops at once for an obstacle. It stays stopped until the front is clear for kClearMs.
+  // ---- The ramp, felt with the IMU ----
+  // flatPitchDeg_ is the pitch on the flat ground where step 14 started. The nose first tilts by
+  // kRampPitchDeg (up or down), and the ramp counts as finished once the pitch is back inside
+  // kRampFlatDeg for kRampFlatMs. Nothing fails if it never happens: the step ends on distance.
+  bool rampFinished(const Input& in) {
+    const float tilt = fabsf(in.pitchDeg - flatPitchDeg_);
+    if (tilt >= kRampPitchDeg) {
+      onRamp_ = true;
+      levelSinceMs_ = in.nowMs;
+      note_ = "On the ramp";
+      return false;
+    }
+    if (!onRamp_) return false;
+    if (tilt > kRampFlatDeg) {
+      levelSinceMs_ = in.nowMs;      // still tilted
+      return false;
+    }
+    return in.nowMs - levelSinceMs_ >= kRampFlatMs;
+  }
+
+  // ---- Picked up off the ground ----
+  // On the ground the rover never leans more than a few degrees, even on the ramp (measured: 8).
+  // More than kLiftedDeg means somebody is holding it, so the wheels are cut at once and nothing
+  // else happens until it is back down and flat for kBackDownMs. The step, the distance and the
+  // direction are all kept, and every clock is pushed forward by the time it spent in the air,
+  // so a long hold cannot run a turn or a step into its timeout.
+  bool liftedOffGround(const Input& in, float dt) {
+    const bool tilted = fabsf(in.pitchDeg) > kLiftedDeg || fabsf(in.rollDeg) > kLiftedDeg;
+    if (tilted) {
+      lifted_ = true;
+      flatSinceMs_ = in.nowMs;
+    } else if (lifted_ && in.nowMs - flatSinceMs_ >= kBackDownMs) {
+      lifted_ = false;
+      note_ = "Back on the ground";
+    }
+    if (!lifted_) return false;
+
+    note_ = "Lifted: put me down";
+    eStop(dt, true);                          // the wheels must not spin in the air
+    const uint32_t held = lroundf(dt * 1000);   // this turn of the loop did not happen for the step
+    stepStartMs_ += held;
+    turnStartMs_ += held;
+    phaseMs_ += held;
+    clearSinceMs_ += held;
+    headingBadSinceMs_ += held;
+    holdSinceMs_ += held;
+    pauseStartMs_ += held;
+    return true;
+  }
+
   // ---- Braking ----
   // Driving and turning come down together, keeping the same share, so a turn does not end as
   // a turn on the spot. change is how much power is taken away in this step.
@@ -804,6 +860,7 @@ class Route {
     phaseMs_ = nowMs;
     turnStartMs_ = nowMs;
     targetHeading_ = targetDeg;
+    headingBadSinceMs_ = nowMs;   // a new direction on purpose is not "lost the straight line"
     spin_ = 0;              // every turn starts from standing still
     watchGone_ = false;
     goneSinceMs_ = 0;
@@ -890,6 +947,10 @@ class Route {
     // Steps 13-15 drive straight in the door direction, so the wall following of step 12
     // cannot leave a crooked heading behind.
     if (next == FIND_PANEL || next == TO_RAMP || next == CROSS_RAMP) targetHeading_ = startHeading_;
+    if (next == TO_RAMP) {
+      flatPitchDeg_ = pitchDeg_;   // the ground here is the flat the ramp is measured against
+      onRamp_ = false;
+    }
     if (next == TURN_RIGHT || next == TURN_LEFT_AT_E || next == TURN_LEFT_TO_G) {
       targetHeading_ = startHeading_;                       // the same way as at the door
     }
@@ -922,6 +983,11 @@ class Route {
   const char* endedResult_ = "";
   bool stepEnded_ = false;
   bool hardStop_ = false;    // STOP pressed again while braking: cut the power at once
+  bool lifted_ = false;      // the rover is off the ground, in somebody's hands
+  bool onRamp_ = false;      // step 14: the nose has tilted, the rover is on the ramp
+  float flatPitchDeg_ = 0;   // the pitch on the flat ground before the ramp
+  uint32_t levelSinceMs_ = 0;  // since when the nose has been level again
+  uint32_t flatSinceMs_ = 0; // since when it has been flat again
   const char* note_ = "Press Start";
   float startHeading_ = 0, targetHeading_ = 0;
   float speed_ = 0, pull_ = 0, left_ = 0, right_ = 0;
