@@ -192,6 +192,7 @@ static void publishStatus(const Route::Input& in) {
   s.lidarOk = in.lidarOk;
   s.stepNumber = route.step();
   s.group = runGroup;
+  s.newWay = route.newWay();
   snprintf(s.step, sizeof(s.step), "%s", Route::name(route.step()));
   snprintf(s.note, sizeof(s.note), "%s", route.note());
   s.left = route.left();
@@ -258,11 +259,12 @@ void loop() {
 
     if (command == WEBpage::Command::Start && !route.running()) {
       runGroup = web.groupWanted();
+      const bool newWay = web.newWayWanted();   // which Start button was pressed
       if (runGroup == 0) {
-        route.start(in);   // the whole route, steps 1 to kLastStep
+        route.start(in, Route::FORWARD_OUT, kLastStep, 0, newWay);   // the whole route
       } else {
         const TestGroup& group = kTestGroups[runGroup - 1];
-        route.start(in, group.firstStep, group.lastStep, group.facingDeg);
+        route.start(in, group.firstStep, group.lastStep, group.facingDeg, newWay);
       }
       logThisRun = web.logWanted();
       if (logThisRun) runLog.clear(runGroup);   // not saving: the last saved log stays

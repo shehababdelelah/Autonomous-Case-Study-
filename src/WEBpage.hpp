@@ -14,6 +14,7 @@ class WEBpage {
     bool roverOk = false, imuOk = false, lidarOk = false;
     int stepNumber = 0;
     int group = 0;   // 0 = the whole route, 1-4 = a test group
+    bool newWay = false;   // this run uses the new way from the small pillar to wall K
     char step[32] = "Not started";
     char note[48] = "Press Start";
     float left = 0, right = 0, distanceM = 0, voltage = 0;
@@ -33,6 +34,7 @@ class WEBpage {
   bool logWanted() const { return logWanted_; }   // the CSV choice sent with the last Start
   int groupWanted() const { return group_; }      // 0 = the whole route, 1-4 = a test group
   bool gpsWanted() const { return gpsOn_; }       // the GPS On / Off button
+  bool newWayWanted() const { return newWay_; }   // the Start button that was pressed
 
  private:
  String statusJson();
@@ -45,4 +47,5 @@ class WEBpage {
   volatile bool logWanted_ = true;
   volatile int group_ = 0;
   volatile bool gpsOn_ = false;
+  volatile bool newWay_ = false;
 };

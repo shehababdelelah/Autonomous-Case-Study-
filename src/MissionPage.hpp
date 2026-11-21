@@ -15,6 +15,7 @@ main{max-width:480px;margin:0 auto;padding:16px;text-align:center}
 h1{font-size:24px;margin:8px 0 4px}
 p{color:var(--muted);margin:0 0 20px}
 button{font:inherit;font-size:28px;font-weight:800;width:100%;min-height:120px;border:0;border-radius:16px;color:#fff;background:#17803d;cursor:pointer}
+#stop{background:#c62828;margin-top:14px}
 button:disabled{background:#8a96a3;cursor:not-allowed}
 #msg{min-height:3em;margin-top:20px;font-weight:700}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
@@ -23,6 +24,7 @@ a{color:var(--muted)}
 <h1>Rover 8 mission</h1>
 <p>Runs the route alone. Nothing is saved or sent. After Start you can leave the Wi-Fi.</p>
 <button id="start">Start mission</button>
+<button id="stop">EMERGENCY STOP</button>
 <p id="msg"></p>
 <a href="/">Test page</a>
 <script>
@@ -36,5 +38,6 @@ start.onclick=async()=>{
   if(!r.ok)start.disabled=false;
  }catch(e){msg.className='bad';msg.textContent='No connection to the box. Join Wi-Fi CAS-Box-08.';start.disabled=false;}
 };
+document.getElementById('stop').onclick=()=>fetch('/api/stop',{method:'POST'});
 </script></main></body></html>
 )RV8MIS";

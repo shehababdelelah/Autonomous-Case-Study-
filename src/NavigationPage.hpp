@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
-// Simple route page. It reads /api/status and sends /api/start and /api/stop.
+// Test page, in nine sections. It reads /api/status and sends /api/start, /api/stop,
+// /api/gps and /api/restart. The mission page is a separate file (MissionPage.hpp).
 static const char kNavigationPage[] PROGMEM = R"RV8NAV(
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -29,64 +30,93 @@ h2{font-size:15px;margin:0 0 8px;color:var(--muted);font-weight:600}
 .wait{background:var(--waitbg);border-color:var(--wait)}.wait #title{color:var(--wait)}
 .bad{background:var(--badbg);border-color:var(--bad)}.bad #title{color:var(--bad)}
 .idle{background:var(--idlebg);border-color:var(--idle)}.idle #title{color:var(--idle)}
-.buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
 button{font:inherit;font-weight:800;min-height:68px;border:0;border-radius:12px;color:#fff;cursor:pointer}
-#start{background:#17803d}#stop{background:#c62828}
-#start:disabled{background:#8a96a3;cursor:not-allowed}
-#restart{background:#5b6876;width:100%;min-height:52px;margin-top:16px}
+.start{background:#17803d}
+.stop{background:#c62828}
+button:disabled{background:#8a96a3;cursor:not-allowed}
+#gps{background:#34506b;width:100%;min-height:56px;margin-top:10px}
+#restart{background:#5b6876;width:100%;min-height:52px}
 .group{width:100%;min-height:56px;margin-top:8px;background:#34506b;text-align:left;padding:0 14px}
-.group:disabled{background:#8a96a3;cursor:not-allowed}
-.hint{margin:0;color:var(--muted);font-size:15px}
+.hint{margin:10px 0 0;color:var(--muted);font-size:15px}
 .check{display:flex;align-items:center;gap:10px;margin-top:12px}
 .check input{width:24px;height:24px}
 .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid var(--line)}
 .row:first-of-type{border-top:0}
 .row span:first-child{color:var(--muted)}
 .row span:last-child{font-weight:700;text-align:right}
+.links{margin:12px 0 0;font-size:15px}
 .yes{color:var(--ok)}.no{color:var(--bad)}
 </style></head><body><main>
 <header><h1>Rover 8</h1><span class="tag" id="link">Connecting</span></header>
 <section class="card idle" id="status"><p id="title">Connecting</p><p id="why">Waiting for the box.</p></section>
-<label class="check"><input type="checkbox" id="record" checked>Save this run as CSV</label>
-<div class="buttons"><button id="start" disabled>Start</button><button id="stop">STOP</button></div>
-<p><a href="/log.csv">Download the last run (CSV)</a> &middot; <a href="/steps.csv">Step times (CSV)</a> &middot; <a href="/gps.csv">GPS (CSV)</a> &middot; <a href="/mission">Mission mode</a></p>
-<section class="card"><h2>Test one group of steps (always saved as CSV)</h2>
- <p class="hint">Put the rover where the first step of the group starts, facing the way that step drives.</p>
+
+<section class="card"><h2>1. Missions</h2>
+ <div class="row"><span>Running now</span><span id="way">Nothing</span></div>
+ <p class="hint"><b>Old mission.</b> At the small pillar: turn 90 right, 1.5 m, turn 90 left,
+  drive north to wall G, turn 90 right, then along wall K.</p>
+ <div class="buttons"><button class="start" id="startOld">Start old</button><button class="stop" id="stopOld">STOP</button></div>
+ <p class="hint"><b>New mission.</b> At the small pillar: turn 45 right, one diagonal to the
+  K building, turn 45 right, then along wall K. Two steps shorter.</p>
+ <div class="buttons"><button class="start" id="startNew">Start new</button><button class="stop" id="stopNew">STOP</button></div>
+ <p class="links"><a href="/mission">Mission mode</a></p>
+</section>
+
+<section class="card"><h2>2. Test groups</h2>
+ <p class="hint">Put the rover where the first step of the group starts, facing the way that step drives.
+  A group is always saved as CSV.</p>
+ <label class="check"><input type="checkbox" id="newGroup">Use the new way to wall K</label>
  <div id="groups"><p class="hint">Loading the groups...</p></div>
 </section>
-<section class="card"><h2>GPS and clock</h2>
- <div class="row"><span>Date and time</span><span id="clock">-</span></div>
- <div class="row"><span>GPS</span><span id="gpsOn">-</span></div>
- <div class="row"><span>Fix / satellites</span><span id="gpsFix">-</span></div>
- <div class="row"><span>Position</span><span id="gpsPos">-</span></div>
- <div class="buttons"><button id="gps">GPS On / Off</button></div>
-</section>
-<section class="card"><h2>Checks</h2>
+
+<section class="card"><h2>3. Checks</h2>
  <div class="row"><span>Rover link</span><span id="roverOk">-</span></div>
  <div class="row"><span>IMU</span><span id="imuOk">-</span></div>
  <div class="row"><span>LiDAR</span><span id="lidarOk">-</span></div>
+ <div class="row"><span>GPS</span><span id="gpsCheck">-</span></div>
 </section>
-<section class="card"><h2>Route</h2>
- <div class="row"><span>Test</span><span id="group">-</span></div>
+
+<section class="card"><h2>4. Route</h2>
+ <div class="row"><span>Test group</span><span id="group">-</span></div>
  <div class="row"><span>Step</span><span id="step">-</span></div>
  <div class="row"><span>Pillars</span><span id="pillars">-</span></div>
  <div class="row"><span>Walls</span><span id="walls">-</span></div>
  <div class="row"><span>Panels</span><span id="panels">-</span></div>
  <div class="row"><span>Distance (estimate)</span><span id="distance">-</span></div>
 </section>
-<section class="card"><h2>LiDAR distance</h2>
+
+<section class="card"><h2>5. LiDAR distance</h2>
  <div class="row"><span>Front</span><span id="front">-</span></div>
  <div class="row"><span>Right</span><span id="right">-</span></div>
  <div class="row"><span>Back</span><span id="back">-</span></div>
  <div class="row"><span>Left</span><span id="left">-</span></div>
 </section>
-<section class="card"><h2>Rover</h2>
+
+<section class="card"><h2>6. Rover</h2>
  <div class="row"><span>Wheels left / right</span><span id="wheels">-</span></div>
  <div class="row"><span>Heading / target</span><span id="heading">-</span></div>
  <div class="row"><span>Battery</span><span id="battery">-</span></div>
- <div class="row"><span>CSV of this run</span><span id="logging">-</span></div>
 </section>
-<button id="restart">Restart box</button>
+
+<section class="card"><h2>7. GPS and time</h2>
+ <div class="row"><span>Date and time</span><span id="clock">-</span></div>
+ <div class="row"><span>Latitude</span><span id="lat">-</span></div>
+ <div class="row"><span>Longitude</span><span id="lon">-</span></div>
+ <div class="row"><span>Fix / satellites</span><span id="gpsFix">-</span></div>
+ <button id="gps">GPS On / Off</button>
+</section>
+
+<section class="card"><h2>8. Log</h2>
+ <label class="check"><input type="checkbox" id="record" checked>Save this run as CSV</label>
+ <div class="row" style="margin-top:10px"><span>CSV of this run</span><span id="logging">-</span></div>
+ <p class="links"><a href="/log.csv">Run (CSV)</a> &middot; <a href="/steps.csv">Step times (CSV)</a>
+  &middot; <a href="/gps.csv">GPS (CSV)</a></p>
+</section>
+
+<section class="card"><h2>9. Box</h2>
+ <button id="restart">Restart box</button>
+</section>
+
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
@@ -95,15 +125,18 @@ const cm=v=>v>0?v+' cm':'No reading';
 function check(id,ok){say(id,ok?'OK':'NOT OK');$(id).className=ok?'yes':'no';}
 let groups=[];
 let gpsOn=false;
+let canStart=false;
 const groupText=g=>'Steps '+g.first+'-'+g.last+': '+g.name;
+const newWay=()=>$('newGroup').checked?1:0;
+
 async function loadGroups(){
  try{groups=await (await fetch('/api/groups',{cache:'no-store'})).json();}
  catch(e){setTimeout(loadGroups,2000);return;}
  $('groups').textContent='';
  groups.forEach((g,i)=>{
   const b=document.createElement('button');
-  b.className='group';b.textContent=groupText(g);b.disabled=$('start').disabled;
-  b.onclick=()=>fetch('/api/start?log=1&group='+(i+1),{method:'POST'});
+  b.className='group';b.textContent=groupText(g);b.disabled=!canStart;
+  b.onclick=()=>fetch('/api/start?log=1&group='+(i+1)+'&new='+newWay(),{method:'POST'});
   $('groups').appendChild(b);
  });
 }
@@ -112,37 +145,49 @@ function view(s){
  if(s.running)return ['ok','DRIVING',s.note&&s.note!=='Driving'?s.step+' - '+s.note:s.step];
  if(s.stepNumber===25)return ['ok','FINISHED','Check the real position with your eyes.'];
  if(s.stepNumber===26)return ['bad','STOPPED BY SAFETY',s.note];
- if(!s.roverOk)return ['wait','NOT READY','Start the box first, then restart the rover.'];
- if(!s.imuOk)return ['wait','NOT READY','Waiting for the IMU.'];
- if(!s.lidarOk)return ['wait','NOT READY','No LiDAR data. Check the wiring.'];
+ if(!s.roverOk)return ['bad','NO ROVER','The box cannot reach the rover.'];
+ if(!s.imuOk)return ['wait','WAITING FOR THE IMU','The direction sensor is not ready.'];
+ if(!s.lidarOk)return ['bad','NO LIDAR','No data from the LiDAR.'];
  return ['idle','READY',s.note];
 }
 function show(s){
  const v=view(s);
  $('status').className='card '+v[0];say('title',v[1]);say('why',v[2]);say('link','Connected to box');
- $('start').disabled=s.running||!s.roverOk||!s.imuOk||!s.lidarOk;
- $('record').disabled=s.running;
- document.querySelectorAll('.group').forEach(b=>{b.disabled=$('start').disabled;});
- say('group',s.group>0&&groups[s.group-1]?groupText(groups[s.group-1]):'Whole route');
- say('logging',s.logging?'Saved':'Not saved (last saved CSV kept)');
+ canStart=!s.running&&s.roverOk&&s.imuOk&&s.lidarOk;
+ $('startOld').disabled=!canStart;$('startNew').disabled=!canStart;
+ $('record').disabled=s.running;$('newGroup').disabled=s.running;
+ document.querySelectorAll('.group').forEach(b=>{b.disabled=!canStart;});
+ // 1. Missions
+ say('way',s.running?(s.newWay?'New mission':'Old mission'):'Nothing');
+ // 3. Checks
  check('roverOk',s.roverOk);check('imuOk',s.imuOk);check('lidarOk',s.lidarOk);
+ gpsOn=s.gpsOn;
+ say('gpsCheck',!gpsOn?'Off':(s.gpsFix?'Fix':'No fix yet'));
+ $('gpsCheck').className=!gpsOn?'':(s.gpsFix?'yes':'no');
+ // 4. Route
+ say('group',s.group>0&&groups[s.group-1]?groupText(groups[s.group-1]):'Whole route');
  say('step',s.step);say('pillars',s.pillars+' of 5');say('walls',s.walls+' of 6');say('panels',s.panels);
  say('distance',s.distanceM.toFixed(2)+' m');
+ // 5. LiDAR
  say('front',cm(s.frontCm));say('right',cm(s.rightCm));say('back',cm(s.backCm));say('left',cm(s.leftCm));
+ // 6. Rover
  say('wheels',s.left.toFixed(2)+' / '+s.right.toFixed(2));
  say('heading',s.headingDeg.toFixed(1)+' / '+s.targetDeg.toFixed(1));
  say('battery',s.voltage>0?s.voltage.toFixed(1)+' V':'-');
- gpsOn=s.gpsOn;
+ // 7. GPS and time
  say('clock',s.clock);
- say('gpsOn',gpsOn?'On':'Off');$('gpsOn').className=gpsOn?'yes':'no';
- say('gpsFix',!gpsOn?'-':(s.gpsFix?'fix':'no fix')+', '+s.satellites+' satellites'+
+ say('lat',s.gpsFix?s.latDeg.toFixed(6):'-');
+ say('lon',s.gpsFix?s.lonDeg.toFixed(6):'-');
+ say('gpsFix',!gpsOn?'GPS is off':(s.gpsFix?'fix':'no fix')+', '+s.satellites+' satellites'+
   (s.fixQuality==2?' (EGNOS)':''));
- say('gpsPos',s.gpsFix?s.latDeg.toFixed(6)+', '+s.lonDeg.toFixed(6):'-');
+ // 8. Log
+ say('logging',s.logging?'Saved':'Not saved (last saved CSV kept)');
 }
 function offline(){
  $('status').className='card bad';say('title','NO CONNECTION');
  say('why','Join Wi-Fi CAS-Box-08. A running test can continue.');
- say('link','Not connected');$('start').disabled=true;
+ say('link','Not connected');canStart=false;
+ $('startOld').disabled=true;$('startNew').disabled=true;
 }
 async function poll(){
  const stop=new AbortController(),timer=setTimeout(()=>stop.abort(),1500);
@@ -150,10 +195,13 @@ async function poll(){
  catch(e){offline();}
  finally{clearTimeout(timer);setTimeout(poll,500);}
 }
+const startUrl=way=>'/api/start?group=0&new='+way+'&log='+($('record').checked?1:0);
 try{$('record').checked=localStorage.getItem('record')!=='0';}catch(e){}
 $('record').onchange=()=>{try{localStorage.setItem('record',$('record').checked?'1':'0');}catch(e){}};
-$('start').onclick=()=>fetch('/api/start?log='+($('record').checked?1:0),{method:'POST'});
-$('stop').onclick=()=>fetch('/api/stop',{method:'POST'});
+$('startOld').onclick=()=>fetch(startUrl(0),{method:'POST'});
+$('startNew').onclick=()=>fetch(startUrl(1),{method:'POST'});
+$('stopOld').onclick=()=>fetch('/api/stop',{method:'POST'});
+$('stopNew').onclick=()=>fetch('/api/stop',{method:'POST'});
 $('gps').onclick=()=>fetch('/api/gps?on='+(gpsOn?0:1),{method:'POST'});
 $('restart').onclick=()=>{
  if(confirm('Restart the box? The rover stops and the run log (CSV) is deleted. Download it first.'))

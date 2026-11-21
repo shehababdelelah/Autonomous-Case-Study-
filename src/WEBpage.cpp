@@ -19,6 +19,8 @@ void WEBpage::begin() {
     // /api/start?group=2 drives only test group 2 (Settings.hpp). Without "group": the whole route.
     group_ = r->hasParam("group") ? r->getParam("group")->value().toInt() : 0;
     if (group_ < 0 || group_ > kTestGroupCount) group_ = 0;
+    // /api/start?new=1 drives the new way from the small pillar to wall K.
+    newWay_ = r->hasParam("new") && r->getParam("new")->value() == "1";
     startPending_ = true;
     r->send(200, "application/json", "{\"ok\":true}");
   });
@@ -95,6 +97,7 @@ const char* WEBpage::missionStart() {
   if (!s.lidarOk) return "{\"ok\":false,\"text\":\"Not ready: no LiDAR data.\"}";
   logWanted_ = false;     // mission mode saves nothing
   group_ = 0;             // and drives the whole route
+  newWay_ = false;        // ...the old, tested way to wall K
   startPending_ = true;
   return "{\"ok\":true,\"text\":\"Mission started. You can leave the Wi-Fi now.\"}";
 }
@@ -111,11 +114,11 @@ String WEBpage::statusJson() {
            "\"distanceM\":%.2f,\"voltage\":%.1f,\"pillars\":%d,\"walls\":%d,\"panels\":%d,"
            "\"headingDeg\":%.1f,\"targetDeg\":%.1f,\"frontCm\":%d,\"rightCm\":%d,"
            "\"backCm\":%d,\"leftCm\":%d,"
-           "\"gpsOn\":%d,\"gpsFix\":%d,\"satellites\":%d,\"fixQuality\":%d,"
+           "\"newWay\":%d,\"gpsOn\":%d,\"gpsFix\":%d,\"satellites\":%d,\"fixQuality\":%d,"
            "\"latDeg\":%.7f,\"lonDeg\":%.7f,\"clock\":\"%s\"}",
            s.running, s.blocked, s.logging, s.roverOk, s.imuOk, s.lidarOk, s.stepNumber, s.group, s.step, s.note,   // line 67
            s.left, s.right, s.distanceM, s.voltage, s.pillars, s.walls, s.panels,
            s.headingDeg, s.targetDeg, s.frontCm, s.rightCm, s.backCm, s.leftCm,
-           s.gpsOn, s.gpsFix, s.satellites, s.fixQuality, s.latDeg, s.lonDeg, s.clock);
+           s.newWay, s.gpsOn, s.gpsFix, s.satellites, s.fixQuality, s.latDeg, s.lonDeg, s.clock);
   return String(json);
 }

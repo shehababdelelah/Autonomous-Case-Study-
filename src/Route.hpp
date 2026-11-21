@@ -101,7 +101,11 @@ class Route {
   // Starts at firstStep and stops after lastStep (see the test groups in Settings.hpp).
   // facingDeg: the way the rover faces now, compared with the door direction (0 for step 1).
   // Every turn is counted from the door direction, so the turns stay right in a test group.
-  void start(const Input& in, int firstStep = FORWARD_OUT, int lastStep = kLastStep, float facingDeg = 0) {
+  // newWay = false: the old way from the small pillar to wall K (two 90 degree turns and a
+  // drive north). newWay = true: one diagonal, see kNewWayDeg in Settings.hpp.
+  void start(const Input& in, int firstStep = FORWARD_OUT, int lastStep = kLastStep,
+             float facingDeg = 0, bool newWay = false) {
+    newWay_ = newWay;
     startHeading_ = wrap360(in.headingDeg - facingDeg);
     targetHeading_ = in.headingDeg;
     lastStep_ = lastStep;
@@ -421,15 +425,28 @@ class Route {
         break;
 
       case TURN_RIGHT_AT_PILLAR:   // 16
-      case TURN_LEFT_TO_G:         // 18
       case TURN_RIGHT_AT_G:        // 20
       case TURN_RIGHT_LAST:        // 23
         if (turnFinished(in, dt)) finishStep(in.nowMs);   // the direction is set in enterStep()
         break;
 
-      case FORWARD_AFTER_PILLAR:   // 17: a short way between two turns
+      case TURN_LEFT_TO_G:         // 18: the second turn, now along the K building
+        // After this turn the new way already faces along wall K, so steps 19 and 20 are skipped.
+        if (turnFinished(in, dt)) {
+          if (newWay_) finishStepJump(in.nowMs, ALONG_K);
+          else finishStep(in.nowMs);
+        }
+        break;
+
+      case FORWARD_AFTER_PILLAR:   // 17: between the two turns
         driveStraight(in, dt);
-        if (reached(kAfterSmallPillarM)) finishStep(in.nowMs);
+        if (!newWay_) {
+          if (reached(kAfterSmallPillarM)) finishStep(in.nowMs);   // old way: a short hop
+        } else if (endWallFilter_.update(wallFront(kNewWayStopCm), in.nowMs)) {
+          finishStep(in.nowMs);      // new way: the diagonal ends at the wall of the K building
+        } else if (stepM_ >= kNewWayMaxM) {
+          fail("K building not found on the diagonal");
+        }
         break;
 
       case DRIVE_TO_G:   // 19: wall G in front, then stop
@@ -493,6 +510,7 @@ class Route {
   float right() const { return right_; }
   float lastResetDeg() const { return lastResetDeg_; }   // last change of the door direction
   float pitchDeg() const { return pitchDeg_; }           // newest IMU pitch, for the CSV
+  bool newWay() const { return newWay_; }   // which way to wall K this run uses
   int pillars() const { return pillars_; }
   int walls() const { return walls_; }
   int panels() const { return panels_; }
@@ -533,9 +551,9 @@ class Route {
       case FIND_PANEL: return "Looking for the panel";
       case TO_RAMP: return "To the ramp, beam check";
       case CROSS_RAMP: return "Over the ramp to the pillar";
-      case TURN_RIGHT_AT_PILLAR: return "Turning right at small pillar";
-      case FORWARD_AFTER_PILLAR: return "Forward after small pillar";
-      case TURN_LEFT_TO_G: return "Turning left to G";
+      case TURN_RIGHT_AT_PILLAR: return "Turning at the small pillar";
+      case FORWARD_AFTER_PILLAR: return "Forward to the next turn";
+      case TURN_LEFT_TO_G: return "Second turn, along K";
       case DRIVE_TO_G: return "Driving to wall G";
       case TURN_RIGHT_AT_G: return "Turning right at wall G";
       case ALONG_K: return "Along wall K, 2 pillars right";
@@ -924,6 +942,16 @@ class Route {
   }
 
   // Goes to the next step while still driving, unless this is the last test step.
+  // Jumps over the steps the new way does not use. The jump is forward, so lastStep_ still
+  // ends the run when that step is reached.
+  void finishStepJump(uint32_t nowMs, Step next) {
+    noteStepEnd(nowMs, "done");
+    nextStep_ = next > lastStep_ ? DONE : next;
+    pausing_ = true;
+    pauseStartMs_ = nowMs;
+    blocked_ = false;
+  }
+
   void nextStepNoStop(uint32_t nowMs) {
     if (step_ >= lastStep_) {
       finishStep(nowMs);
@@ -992,11 +1020,19 @@ class Route {
       flatPitchDeg_ = pitchDeg_;   // the ground here is the flat the ramp is measured against
       onRamp_ = false;
     }
-    if (next == TURN_RIGHT || next == TURN_LEFT_AT_E || next == TURN_LEFT_TO_G) {
+    if (next == TURN_RIGHT || next == TURN_LEFT_AT_E) {
       targetHeading_ = startHeading_;                       // the same way as at the door
     }
-    if (next == TURN_RIGHT_AT_E || next == TURN_RIGHT_AT_PILLAR || next == TURN_RIGHT_AT_G) {
+    if (next == TURN_LEFT_TO_G) {
+      targetHeading_ = newWay_ ? wrap360(startHeading_ + 90.0f) : startHeading_;
+    }
+    if (next == TURN_RIGHT_AT_E || next == TURN_RIGHT_AT_G) {
       targetHeading_ = wrap360(startHeading_ + 90.0f);      // 90 to the right of that
+    }
+    // Steps 16 and 18 are the two turns to wall K. The old way turns 90 right and then 90
+    // left again; the new way turns kNewWayDeg right twice, which adds up to the same 90.
+    if (next == TURN_RIGHT_AT_PILLAR) {
+      targetHeading_ = wrap360(startHeading_ + (newWay_ ? kNewWayDeg : 90.0f));
     }
     if (next == TURN_RIGHT_LAST) targetHeading_ = wrap360(startHeading_ + 180.0f);   // back the other way
   }
@@ -1024,6 +1060,7 @@ class Route {
   const char* endedResult_ = "";
   bool stepEnded_ = false;
   bool hardStop_ = false;    // STOP pressed again while braking: cut the power at once
+  bool newWay_ = false;      // the diagonal from the small pillar to wall K
   bool lifted_ = false;      // the rover is off the ground, in somebody's hands
   bool onRamp_ = false;      // step 14: the nose has tilted, the rover is on the ramp
   float flatPitchDeg_ = 0;   // the pitch on the flat ground before the ramp

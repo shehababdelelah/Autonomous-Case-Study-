@@ -278,7 +278,17 @@ constexpr uint32_t kSmallPillarHoldMs = 1500;   // it must stand still this long
 constexpr float kSmallPillarMaxM = 15.0f;       // safety
 
 // Step 17: forward between the turns at the small pillar
-constexpr float kAfterSmallPillarM = 1.50f;     // step 17 (your measure was 120-140 cm)
+constexpr float kAfterSmallPillarM = 1.50f;     // step 17, old way (your measure: 120-140 cm)
+// ---- The new way from the small pillar to the K building ----
+// Old way: turn 90 right, 1.5 m, turn 90 left, drive north to wall G, turn 90 right, along K.
+// New way: turn kNewWayDeg right, drive one diagonal until the wall of the K building is in
+// front, turn kNewWayDeg right again, then straight on to the step along wall K. Steps 19 and
+// 20 are not used.
+// Your plan: 10 m north from the small pillar, so at 45 degrees the diagonal is 14.1 m and the
+// rover meets the wall about 10 m further east, which is in front of the K building.
+constexpr float kNewWayDeg = 45.0f;             // both turns of the new way
+constexpr int kNewWayStopCm = 210;              // stop this far in front of the K building wall
+constexpr float kNewWayMaxM = 20.0f;            // safety: the wall must come before this
 
 // Step 19: wall G in front, then stop
 constexpr int kGStopCm = 210;                   // your measure: 180-190; it stops about 20 cm closer than this
@@ -329,6 +339,7 @@ constexpr int kTestGroupCount = sizeof(kTestGroups) / sizeof(kTestGroups[0]);
 
 // Checked when you build: these numbers must fit together.
 static_assert(kEndWallStopCm > kObstacleStopCm, "wall E: the obstacle stop would come first");
+static_assert(kNewWayStopCm > kObstacleStopCm + kLidarToFrontCm, "the new way would hit the obstacle stop first");
 static_assert(kLeftPillarFixDeg < kMaxHeadingErrorDeg, "the pillar correction would look like a lost line");
 static_assert(kLeftPillarMinCm < kLeftPillarCm && kLeftPillarCm < kLeftPillarMaxCm, "the pillar distance must be inside its band");
 static_assert(kSmallPillarSeenCm > kObstacleStopCm + kLidarToFrontCm, "step 15: the obstacle stop would come first");
