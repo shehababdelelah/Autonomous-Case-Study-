@@ -37,6 +37,16 @@ constexpr float kCountMaxM = 40.0f;             // stop if the pillars are not f
 constexpr float kToEndMinM = 20.0f;             // MEASURE: right turn to wall E, minus 3 m (0 = off).
                                                 // 20 for now: in run openSee, step 7 drove 25 m and wall E was not reached yet
 constexpr float kToEndMaxM = 50.0f;             // stop if wall E is not found
+// ---- Step 7: the three pillars on the left hold the straight line ----
+// They all stand the same distance from the line the rover should drive, so each one tells it
+// how far it has drifted. Set kUseLeftPillars to false to switch the whole thing off.
+constexpr bool kUseLeftPillars = true;
+constexpr int kLeftPillarCm = 230;              // your plan: 2.30 m from the line to the pillars
+constexpr int kLeftPillarMinCm = 170;           // a pillar only counts inside this band
+constexpr int kLeftPillarMaxCm = 300;
+constexpr int kLeftPillarDeadCm = 10;           // less than this is not worth correcting
+constexpr float kLeftPillarMaxFixM = 0.80f;     // never correct more than this at one pillar
+constexpr float kLeftPillarFixDeg = 10.0f;      // how far it aims back toward the line
 
 // ---- Hold a straight line, values from Robot_8 ----
 constexpr float kHeadingGain = 0.05f;           // wheel command per degree of error
@@ -319,6 +329,8 @@ constexpr int kTestGroupCount = sizeof(kTestGroups) / sizeof(kTestGroups[0]);
 
 // Checked when you build: these numbers must fit together.
 static_assert(kEndWallStopCm > kObstacleStopCm, "wall E: the obstacle stop would come first");
+static_assert(kLeftPillarFixDeg < kMaxHeadingErrorDeg, "the pillar correction would look like a lost line");
+static_assert(kLeftPillarMinCm < kLeftPillarCm && kLeftPillarCm < kLeftPillarMaxCm, "the pillar distance must be inside its band");
 static_assert(kSmallPillarSeenCm > kObstacleStopCm + kLidarToFrontCm, "step 15: the obstacle stop would come first");
 static_assert(kBeamStopCm > kObstacleStopCm + kLidarToFrontCm, "the beam check must come before the obstacle stop");
 static_assert(kLastPillarStopCm > kObstacleStopCm + kLidarToFrontCm, "step 24: the obstacle stop would come first");

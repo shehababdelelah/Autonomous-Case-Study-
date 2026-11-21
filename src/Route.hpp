@@ -197,6 +197,32 @@ class Route {
             refDone_ = true;
           }
         }
+        // The three pillars on the left all stand kLeftPillarCm from the line the rover should
+        // drive. Every pillar it passes is measured: the difference is how far it has drifted
+        // sideways, and it aims kLeftPillarFixDeg back toward the line until that is used up.
+        // If no pillar is seen, nothing happens and the rover drives as before.
+        if (kUseLeftPillars) {
+          if (fixUntilM_ > 0) {                       // a correction is running
+            if (stepM_ >= fixUntilM_) {
+              fixUntilM_ = -1;
+              targetHeading_ = startHeading_;         // back onto the straight line
+              note_ = "Driving to wall E";
+            }
+          } else if (smallFilter_.update(smallLeft(kLeftPillarMinCm, kLeftPillarMaxCm), in.nowMs) &&
+                     stepM_ - lastLeftPillarM_ >= kPillarMinGapM) {
+            lastLeftPillarM_ = stepM_;
+            const int cm = sideMinCm(270, kSmallFanDeg, kLeftPillarMinCm, kLeftPillarMaxCm);
+            const float errCm = cm - (float)kLeftPillarCm;     // + = too far right of the line
+            if (cm > 0 && fabsf(errCm) >= kLeftPillarDeadCm) {
+              const float fixM = min(fabsf(errCm) / 100.0f, kLeftPillarMaxFixM);
+              fixUntilM_ = stepM_ + fixM / sinf(kLeftPillarFixDeg * DEG_TO_RAD);
+              targetHeading_ = wrap360(startHeading_ + (errCm > 0 ? -kLeftPillarFixDeg : kLeftPillarFixDeg));
+              headingBadSinceMs_ = in.nowMs;   // aiming off the line on purpose
+              note_ = errCm > 0 ? "Pillar: going back left" : "Pillar: going back right";
+            }
+          }
+        }
+
         if (endWallFilter_.update(stepM_ >= kToEndMinM && frontWallClose(), in.nowMs)) {
           ++walls_;                      // wall E counts as wall 3
           speed_ = left_ = right_ = 0;   // stop at once, the wall is close
@@ -645,6 +671,17 @@ class Route {
 
   // ---- Looking at something in front while standing still ----
   // The closest reading in the front fan, or 0 when nothing is seen there.
+  // The nearest reading around one direction, 0 if nothing is in the band. Used for a
+  // pillar, where the averaging of rayCm() would be thrown off by the edges.
+  int sideMinCm(int centerDeg, int halfDeg, int minCm, int maxCm) const {
+    int best = 0;
+    for (int angle = centerDeg - halfDeg; angle <= centerDeg + halfDeg; ++angle) {
+      const int cm = lidar_.distanceMm(angle) / 10;
+      if (cm >= minCm && cm <= maxCm && (best == 0 || cm < best)) best = cm;
+    }
+    return best;
+  }
+
   int frontMinCm(int halfDeg) const {
     int best = 0;
     for (int angle = -halfDeg; angle <= halfDeg; ++angle) {
@@ -938,6 +975,8 @@ class Route {
     note_ = "Driving";
     settleHeading_ = -1000;
     lastWallM_ = 0;
+    lastLeftPillarM_ = -99;
+    fixUntilM_ = -1;
     pillarFilter_.reset(nowMs);
     wallFilter_.reset(nowMs);
     panelFilter_.reset(nowMs);
@@ -1000,6 +1039,8 @@ class Route {
   float pitchDeg_ = 0;       // newest IMU pitch, kept only so the CSV can show it
   float stepM_ = 0, totalM_ = 0;
   float lastPillarM_ = 0;   // where the last pillar was counted, in metres of step 4
+  float lastLeftPillarM_ = -99;   // step 7: where the last left pillar was measured
+  float fixUntilM_ = -1;         // step 7: drive the sideways correction until here
   float lastWallM_ = 0;     // where the wall we follow was last seen, in metres of this step (12, 22)
   float foundAtM_ = -1;     // step 9: where the pillar was seen, -1 = not yet
   int found_ = 0;           // things found in this step: bench legs (13), pillars (21), wall G (22)
