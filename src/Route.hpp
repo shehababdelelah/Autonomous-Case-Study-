@@ -257,7 +257,9 @@ class Route {
         break;
 
       case ALONG_E_SIDE: {   // 12: along the side wall of E; after its end, on to the fire hydrant
-        const bool wallThere = wallLeft(kLidarMinCm, kFollowWallMaxCm);
+        // Caught out to kESideCatchCm, not kFollowWallMaxCm: step 11 hands over with the wall
+        // up to 130 cm away, and the rover has to be able to pull itself in from there.
+        const bool wallThere = wallLeft(kLidarMinCm, kESideCatchCm);
         if (wallThere) {
           keepWallDistance(in, startHeading_, kESideNearCm, kESideFarCm);
           lastWallM_ = stepM_;

@@ -193,8 +193,12 @@ constexpr int kESideFindMaxCm = 130;            // your measure: 80, but after s
 constexpr float kFindESideMaxM = 5.0f;          // safety: stop the run if the wall is not found
 
 // Step 12: along the side wall of E; after its end, on to the fire hydrant
-constexpr int kESideNearCm = 60;                // follow the wall between these two
-constexpr int kESideFarCm = 80;
+// The rover drives at the middle of these two, and never further out than the second one.
+constexpr int kESideNearCm = 50;                // follow the wall between these two
+constexpr int kESideFarCm = 70;                 // your measure: 70 cm at the most
+// Step 12 looks for the wall out to here. It has to be more than kESideFindMaxCm (130), or the
+// wall step 11 just handed over could be too far away for step 12 to follow at all.
+constexpr int kESideCatchCm = 150;
 constexpr float kESideGoneM = 0.5f;             // the wall must be gone this far to count as ended
 constexpr int kHydrantMinCm = 115;              // your measure: 130-140
 constexpr int kHydrantMaxCm = 170;
