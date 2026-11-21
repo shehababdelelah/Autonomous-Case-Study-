@@ -90,7 +90,9 @@ constexpr float kTurnSlowPart = 1.0f;
 // turning fast when it starts, and a slow stop would carry it past the target.
 constexpr float kTurnBrakePerSec = 2.5f;        // full power to 0 in 0.2 s
 constexpr float kTurnToleranceDeg = 4.0f;       // the turn is finished inside this error
-constexpr uint32_t kTurnTimeoutMs = 8000;       // longer than this means the rover is stuck
+constexpr uint32_t kTurnTimeoutMs = 12000;      // longer than this means the rover is stuck.
+                                                // MEASURED: step 20 turned 90 deg in 4.2 s, but
+                                                // step 18 on worse ground needed over 7.8 s.
 constexpr float kTurnWrongWayDeg = 115.0f;      // error got bigger: wrong direction
 
 // ---- LiDAR directions: 0 = front, 90 = right, 180 = back, 270 = left ----
@@ -243,6 +245,10 @@ constexpr int kGStopCm = 210;                   // your measure: 180-190; it sto
 constexpr float kToGMaxM = 30.0f;               // safety
 
 // Step 21: along wall K on the left, count two pillars on the right
+// Step 21 looks for wall K out to here, not kFollowWallMaxCm. MEASURED: after the turn in
+// step 20 the rover started 157 cm from the wall and drifted to 258 cm over 19 m with no
+// steering at all, because 157 was already outside the 120 cm the follower looks in.
+constexpr int kKWallCatchCm = 300;
 constexpr int kKWallNearCm = 80;                // follow wall K between these two (your measure: 80-90)
 constexpr int kKWallFarCm = 90;
 constexpr int kKPillarMinCm = 225;              // your measure: 240-250
@@ -252,10 +258,10 @@ constexpr float kAlongKMaxM = 30.0f;            // safety
 
 // Step 22: past the end of wall K, wall G on the left, then stop
 // Wall G on the left in step 22. MEASURED in four group 4 runs: 147, 148, 158, 161, 210, 213,
-// 215 cm. The old band 160-200 caught none of them, so the step always failed. It starts just
+// 215 cm, and 259-283 in the last run. The old band 160-200 caught none of them. It starts just
 // above kFollowWallMaxCm (120), which is where wall K stops counting, so the two cannot overlap.
 constexpr int kGLeftMinCm = 150;
-constexpr int kGLeftMaxCm = 250;
+constexpr int kGLeftMaxCm = 320;
 constexpr float kAfterKWallM = 2.30f;           // stop this far after the end of wall K
 constexpr float kPastKMaxM = 15.0f;             // safety
 

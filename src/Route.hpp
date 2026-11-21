@@ -409,7 +409,9 @@ class Route {
         break;
 
       case ALONG_K:   // 21: along wall K on the left, count two pillars on the right
-        if (wallLeft(kLidarMinCm, kFollowWallMaxCm)) keepWallDistance(in, wrap360(startHeading_ + 90.0f), kKWallNearCm, kKWallFarCm);
+        // Wall K is caught from much further out than the other walls: after the turn in step 20
+        // the rover can be 1.5-2.5 m away from it, and the usual kFollowWallMaxCm would never see it.
+        if (wallLeft(kLidarMinCm, kKWallCatchCm)) keepWallDistance(in, wrap360(startHeading_ + 90.0f), kKWallNearCm, kKWallFarCm);
         driveStraight(in, dt);
         if (wallFilter_.update(wallLeft(kLidarMinCm, kFollowWallMaxCm), in.nowMs)) ++walls_;   // wall K
         if (pillarFilter_.update(farPillarRight(kKPillarMinCm, kKPillarMaxCm), in.nowMs)) ++found_;
