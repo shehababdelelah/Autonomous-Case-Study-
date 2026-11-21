@@ -65,7 +65,14 @@ void gpsTask(void* parameter) {
   for (;;) {
     const bool wanted = web.gpsWanted();
     if (wanted != running) {
-      if (wanted) gps.begin(); else gps.end();
+      if (wanted) {
+        gps.begin();
+      } else {
+        gps.end();
+        portENTER_CRITICAL(&gpsMux);
+        gpsLatest = GpsData{};     // off means no position, not the last one
+        portEXIT_CRITICAL(&gpsMux);
+      }
       running = wanted;
     }
     if (running) {
@@ -284,8 +291,9 @@ void loop() {
       lastLogMs = nowMs;
       addLogRow(in, nowMs - runStartMs);
     }
-    // gps.csv: the same Save-this-run choice, but only one row a second.
-    if (logThisRun && route.running() && nowMs - lastGpsLogMs >= kGpsLogPeriodMs) {
+    // gps.csv: only while the GPS is switched on, and with the same Save-this-run choice.
+    // One row a second.
+    if (web.gpsWanted() && logThisRun && route.running() && nowMs - lastGpsLogMs >= kGpsLogPeriodMs) {
       lastGpsLogMs = nowMs;
       addGpsRow(nowMs - runStartMs);
     }
