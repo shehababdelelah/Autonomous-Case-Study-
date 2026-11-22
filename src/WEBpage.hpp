@@ -26,6 +26,7 @@ class WEBpage {
     int satellites = 0, fixQuality = 0;
     double latDeg = 0, lonDeg = 0;
     char clock[24] = "no time yet";   // from the RTC once the GPS has set it
+    int freeKb = 0;                   // free memory in the box, in kB
   };
 
   void begin();

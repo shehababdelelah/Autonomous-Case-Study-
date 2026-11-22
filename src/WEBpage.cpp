@@ -8,7 +8,9 @@ void WEBpage::begin() {
   mutex_ = xSemaphoreCreateMutex();
 
   server_.on("/", HTTP_GET, [](AsyncWebServerRequest* r) {
-    r->send(200, "text/html; charset=utf-8", kNavigationPage);
+    // send_P sends it straight out of flash. send() would first copy the whole page into
+    // memory, and one free block that big is not always there once the logs are allocated.
+    r->send_P(200, "text/html; charset=utf-8", kNavigationPage);
   });
   server_.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* r) {
     r->send(200, "application/json", statusJson());
@@ -33,7 +35,7 @@ void WEBpage::begin() {
     r->send(200, "application/json", "{\"ok\":true}");
   });
     server_.on("/mission", HTTP_GET, [](AsyncWebServerRequest* r) {
-    r->send(200, "text/html; charset=utf-8", kMissionPage);
+    r->send_P(200, "text/html; charset=utf-8", kMissionPage);
   });
   server_.on("/api/mission", HTTP_POST, [this](AsyncWebServerRequest* r) {
     r->send(200, "application/json", missionStart());
@@ -115,10 +117,11 @@ String WEBpage::statusJson() {
            "\"headingDeg\":%.1f,\"targetDeg\":%.1f,\"frontCm\":%d,\"rightCm\":%d,"
            "\"backCm\":%d,\"leftCm\":%d,"
            "\"newWay\":%d,\"gpsOn\":%d,\"gpsFix\":%d,\"satellites\":%d,\"fixQuality\":%d,"
-           "\"latDeg\":%.7f,\"lonDeg\":%.7f,\"clock\":\"%s\"}",
+           "\"latDeg\":%.7f,\"lonDeg\":%.7f,\"clock\":\"%s\",\"freeKb\":%d}",
            s.running, s.blocked, s.logging, s.roverOk, s.imuOk, s.lidarOk, s.stepNumber, s.group, s.step, s.note,   // line 67
            s.left, s.right, s.distanceM, s.voltage, s.pillars, s.walls, s.panels,
            s.headingDeg, s.targetDeg, s.frontCm, s.rightCm, s.backCm, s.leftCm,
-           s.newWay, s.gpsOn, s.gpsFix, s.satellites, s.fixQuality, s.latDeg, s.lonDeg, s.clock);
+           s.newWay, s.gpsOn, s.gpsFix, s.satellites, s.fixQuality, s.latDeg, s.lonDeg, s.clock,
+           s.freeKb);
   return String(json);
 }

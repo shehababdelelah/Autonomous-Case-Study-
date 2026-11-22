@@ -114,7 +114,8 @@ button:disabled{background:#8a96a3;cursor:not-allowed}
 </section>
 
 <section class="card"><h2>9. Box</h2>
- <button id="restart">Restart box</button>
+ <div class="row"><span>Free memory</span><span id="freeKb">-</span></div>
+ <button id="restart" style="margin-top:10px">Restart box</button>
 </section>
 
 <script>
@@ -182,6 +183,8 @@ function show(s){
   (s.fixQuality==2?' (EGNOS)':''));
  // 8. Log
  say('logging',s.logging?'Saved':'Not saved (last saved CSV kept)');
+ // 9. Box
+ say('freeKb',s.freeKb+' kB');
 }
 function offline(){
  $('status').className='card bad';say('title','NO CONNECTION');

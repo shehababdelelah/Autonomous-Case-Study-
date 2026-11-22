@@ -223,6 +223,7 @@ static void publishStatus(const Route::Input& in) {
   s.latDeg = g.latDeg;
   s.lonDeg = g.lonDeg;
   rtc.text(s.clock, sizeof(s.clock));
+  s.freeKb = ESP.getFreeHeap() / 1024;
   web.publish(s);
 }
 
