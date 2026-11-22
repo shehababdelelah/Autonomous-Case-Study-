@@ -21,7 +21,10 @@ class RunLog {
     uint8_t pillarHits, wallHits;       // LiDAR directions that see a pillar / a wall
     uint16_t volts;                     // battery volts x 100, 0 = not read yet
   };
-  static constexpr int kMaxRows = 3000;   // 12.5 minutes at one row every 250 ms
+  // 1500 rows is 6 minutes at one row every 250 ms. The whole route takes about 4 minutes,
+  // so this is enough, and it leaves the memory the web server needs to send the page:
+  // at 3000 rows only 41 kB was free and the page stopped being delivered.
+  static constexpr int kMaxRows = 1500;
 
   // One line of steps.csv: a step that ended, how long it took, and how it ended.
   struct StepTime {
@@ -41,7 +44,7 @@ class RunLog {
     uint8_t hdopX10;      // horizontal dilution of precision x 10
     int16_t altM;
   };
-  static constexpr int kMaxGpsRows = 900;   // 15 minutes at one row a second
+  static constexpr int kMaxGpsRows = 400;   // 6.5 minutes at one row a second
 
   // About 72 KB. If memory is short, the log stays off and the rover still works.
   void begin() {
