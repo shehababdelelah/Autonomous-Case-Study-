@@ -96,21 +96,30 @@ constexpr float kTurnSlowDeg = 25.0f;           // start easing off this far bef
 // MEASURED: at 0.6 the wheels get -0.18 / +0.30 and the rover does not turn at all - it froze
 // for 5.6 s. This rover needs almost full power to rotate, so easing off is switched off.
 constexpr float kTurnSlowPart = 1.0f;
-// The stop at the end of a turn. Faster than the emergency stop on purpose: the rover is still
-// turning fast when it starts, and a slow stop would carry it past the target.
-constexpr float kTurnBrakePerSec = 2.5f;        // full power to 0 in 0.2 s
+// The stop at the end of a turn: gentle. It starts kTurnBrakeStartDeg before the target, so
+// the rover rolls the last degrees while it slows down and comes to rest on the heading.
+constexpr float kTurnBrakePerSec = 0.5f;        // turn power 0.40 to 0 in 0.8 s
+constexpr float kTurnBrakeStartDeg = 10.0f;     // TUNE: start braking this far before the target
 constexpr float kTurnToleranceDeg = 4.0f;       // the turn is finished inside this error
 constexpr uint32_t kTurnTimeoutMs = 12000;      // longer than this means the rover is stuck.
                                                 // MEASURED: step 20 turned 90 deg in 4.2 s, but
                                                 // step 18 on worse ground needed over 7.8 s.
 constexpr float kTurnWrongWayDeg = 115.0f;      // error got bigger: wrong direction
+// Short curve: the outer wheels drive forward, the inner wheels drive backward (about 100 : 60).
+// Right turn: left = +kTurnOuter, right = -kTurnInner. Left turn: the other way round.
+// (kTurnTotal, kTurnForward, kTurnRollMs and kTurnRampPerSec above are no longer used by turnFinished().)
+constexpr float kTurnOuter = 0.40f;             // outer wheels, forward
+constexpr float kTurnInner = 0.25f;             // inner wheels, backward
+constexpr float kTurnAccel = 0.80f;             // power rises 0.8 per second: 0 to full in about 0.45 s
+static_assert(kTurnOuter <= 0.5f && kTurnInner <= 0.5f, "0.50 is the most the rover accepts");
+static_assert(kTurnInner < kTurnOuter, "the outer wheels must be faster, or the rover does not move forward");
 
 // ---- LiDAR directions: 0 = front, 90 = right, 180 = back, 270 = left ----
 constexpr int kLidarAngleShift = 180;           // raw LD20 angle + this = rover angle
 constexpr int kLidarMinCm = 20;                 // LidarScan ignores anything closer
 
 // Obstacle in front: stop and wait until it moves away
-constexpr int kObstacleStopCm = 25;             // measured from the front of the rover
+constexpr int kObstacleStopCm = 40;             // was 25: the gentle stop rolls about 14 cm further
 constexpr int kLidarToFrontCm = 15;             // MEASURE: LiDAR centre to rover front
 constexpr int kFrontConeDeg = 30;               // look this far to each side
 constexpr int kObstacleMinHits = 3;             // directions that must see it
@@ -118,14 +127,15 @@ constexpr uint32_t kClearMs = 1000;             // front must stay clear this lo
 // Emergency stop: STOP pressed, a fault, or something in the way. The wheels go down to 0
 // at this rate instead of being cut off, so the gearbox gets no hard kick. 1.0 = 0.5 to 0
 // in half a second. Smaller = softer but it rolls further.
-constexpr float kEStopRampPerSec = 1.0f;        // wheel command per second while braking
-// Picked up off the ground: leaning more than this in pitch or roll. On the ground the
+constexpr float kEStopRampPerSec = 0.30f;       // was 1.0: gentle, 0.30 to 0 in about 1 s
 // rover stays inside a few degrees, and the ramp measured 8, so 25 is well clear.
 constexpr float kLiftedDeg = 25.0f;
 constexpr uint32_t kBackDownMs = 1000;          // flat again this long = back on the ground
 constexpr bool kEStopHardOnSecondStop = true;   // STOP pressed again while braking: 0 at once
 constexpr int kObstacleHardStopCm = 12;         // obstacle closer than this to the rover front: 0 at once
-
+// false = every stop is gentle, nothing cuts the power at once (second STOP, obstacle closer
+// than kObstacleHardStopCm, lifted). true = those three cut the power at once, as before.
+constexpr bool kAllowHardStop = false;
 // Wall on the left (buildings B and C)
 constexpr int kWallMaxCm = 200;                 // MEASURE
 constexpr int kWallFanDeg = 10;
@@ -157,7 +167,7 @@ constexpr int kPillarsNeeded = 5;
 constexpr int kWallsNeeded = 2;
 
 // End of the first route: wall E in front, no panel needed
-constexpr int kEndWallStopCm = 150;             // stop when wall E is this close to the rover front.
+constexpr int kEndWallStopCm = 170;             // was 150: +20 cm for the soft stop roll
                                                 // Step 9 then drives beside it at this distance, but
                                                 // the curve in step 8 carries the rover closer: MEASURE
                                                 // left_cm at the start of step 9 and correct this.
@@ -291,7 +301,7 @@ constexpr int kNewWayStopCm = 210;              // stop this far in front of the
 constexpr float kNewWayMaxM = 20.0f;            // safety: the wall must come before this
 
 // Step 19: wall G in front, then stop
-constexpr int kGStopCm = 210;                   // your measure: 180-190; it stops about 20 cm closer than this
+constexpr int kGStopCm = 230;                   // was 210: +20 cm for the soft stop roll
 constexpr float kToGMaxM = 30.0f;               // safety
 
 // Step 21: along wall K on the left, count two pillars on the right
@@ -316,7 +326,7 @@ constexpr float kAfterKWallM = 2.30f;           // stop this far after the end o
 constexpr float kPastKMaxM = 15.0f;             // safety
 
 // Step 24: the last pillar in front, then stop: mission finished
-constexpr int kLastPillarStopCm = 55;           // your measure: about 30 from the rover front = 45 on the page;
+constexpr int kLastPillarStopCm = 75;           // was 55: +20 cm for the soft stop roll
                                                 // it stops about 10 cm closer than this
 constexpr float kLastPillarMaxM = 15.0f;        // safety
 
@@ -350,4 +360,4 @@ static_assert(kTurnForward < kTurnTotal, "kTurnForward must leave something for 
 static_assert(kTurnSlowDeg > kTurnToleranceDeg, "the easing must start before the turn is finished");
 static_assert(kEStopRampPerSec > kRampPerSec, "the emergency stop must brake faster than the normal stop");
 static_assert(kObstacleHardStopCm < kObstacleStopCm, "the hard stop must be closer than the normal obstacle stop");
-
+static_assert(kTurnBrakeStartDeg >= kTurnToleranceDeg, "braking must start before the turn counts as finished");
